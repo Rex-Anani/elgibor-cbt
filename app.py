@@ -2,7 +2,6 @@ import os
 import sqlite3
 import random
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash
-from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "elgibor_cbt_production_key_2026")
@@ -25,7 +24,7 @@ def init_db():
             reg_number TEXT UNIQUE NOT NULL,
             fullname TEXT NOT NULL,
             class_level TEXT NOT NULL,
-            section TEXT NOT NULL -- 'Primary' or 'Secondary'
+            section TEXT NOT NULL
         )
     ''')
     
@@ -75,9 +74,9 @@ def init_db():
 
 init_db()
 
-# --- TEMPLATES (Inline HTML for complete single-file deployment) ---
+# --- BASE HTML LAYOUT ---
 
-BASE_LAYOUT = '''
+HTML_HEADER = '''
 <!DOCTYPE html>
 <html>
 <head>
@@ -111,7 +110,9 @@ BASE_LAYOUT = '''
         </div>
     </div>
     <div class="container">
-        {% block content %}{% endblock %}
+'''
+
+HTML_FOOTER = '''
     </div>
 </body>
 </html>
@@ -121,23 +122,21 @@ BASE_LAYOUT = '''
 
 @app.route('/')
 def index():
-    return render_template_string(BASE_LAYOUT + '''
-    {% block content %}
+    content = '''
     <h2 style="text-align:center;">Welcome to Great Elgibor Schools CBT Portal</h2>
-    <div style="display:flex; justify-content:space-around; margin-top:40px;">
+    <div style="display:flex; justify-content:space-around; margin-top:40px; flex-wrap:wrap; gap:15px;">
         <a href="/student/login" class="btn btn-success" style="padding:20px 40px; font-size:18px;">Student Portal</a>
-        <a href="/teacher/login" class="btn" style="padding:20px 40px; font-size:18px;">Teacher Portal</a>
         <a href="/admin/login" class="btn btn-danger" style="padding:20px 40px; font-size:18px;">Admin Control</a>
     </div>
-    {% endblock %}
-    ''')
+    '''
+    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
 
 # --- STUDENT PORTAL & EXAM ENGINE ---
 
 @app.route('/student/login', methods=['GET', 'POST'])
 def student_login():
     if request.method == 'POST':
-        reg_num = request.form.get('reg_number').strip()
+        reg_num = request.form.get('reg_number', '').strip()
         conn = get_db_connection()
         student = conn.execute('SELECT * FROM students WHERE reg_number = ?', (reg_num,)).fetchone()
         conn.close()
@@ -150,8 +149,7 @@ def student_login():
             return redirect('/student/dashboard')
         flash('Invalid Registration Number!')
         
-    return render_template_string(BASE_LAYOUT + '''
-    {% block content %}
+    content = '''
     <h2>Student Login</h2>
     <form method="POST">
         <div class="form-group">
@@ -160,8 +158,8 @@ def student_login():
         </div>
         <button type="submit" class="btn btn-success">Start Exam Session</button>
     </form>
-    {% endblock %}
-    ''')
+    '''
+    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
 
 @app.route('/student/dashboard')
 def student_dashboard():
@@ -173,9 +171,8 @@ def student_dashboard():
     results = conn.execute('SELECT * FROM results WHERE student_id = ?', (session['student_id'],)).fetchall()
     conn.close()
     
-    return render_template_string(BASE_LAYOUT + '''
-    {% block content %}
-    <h2>Student Dashboard ({{ session['class_level'] }})</h2>
+    content = render_template_string('''
+    <h2>Student Dashboard ({{ class_level }})</h2>
     <h3>Available Tests</h3>
     <ul>
     {% for s in subjects %}
@@ -192,8 +189,9 @@ def student_dashboard():
         <tr><td>{{ r['subject'] }}</td><td>{{ r['score'] }} / {{ r['total_questions'] }}</td><td>{{ r['date_taken'] }}</td></tr>
         {% endfor %}
     </table>
-    {% endblock %}
-    ''')
+    ''', class_level=session['class_level'], subjects=subjects, results=results)
+    
+    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
 
 @app.route('/exam/take/<subject>')
 def take_exam(subject):
@@ -209,10 +207,9 @@ def take_exam(subject):
         return redirect('/student/dashboard')
         
     q_list = [dict(q) for q in questions]
-    random.shuffle(q_list) # Anti-cheat randomization
+    random.shuffle(q_list)
     
-    return render_template_string(BASE_LAYOUT + '''
-    {% block content %}
+    content = render_template_string('''
     <div style="display:flex; justify-content:space-between; align-items:center;">
         <h2>Exam: {{ subject }}</h2>
         <div class="timer-box">Time Remaining: <span id="time">15:00</span></div>
@@ -233,11 +230,10 @@ def take_exam(subject):
     </form>
 
     <script>
-        // Anti-cheat & Timer Engine
         var duration = 15 * 60;
         var display = document.querySelector('#time');
         var timer = setInterval(function () {
-            var minutes = int = parseInt(duration / 60, 10);
+            var minutes = parseInt(duration / 60, 10);
             var seconds = parseInt(duration % 60, 10);
             minutes = minutes < 10 ? "0" + minutes : minutes;
             seconds = seconds < 10 ? "0" + seconds : seconds;
@@ -249,15 +245,15 @@ def take_exam(subject):
             }
         }, 1000);
 
-        // Tab focus detection alert
         document.addEventListener("visibilitychange", function() {
             if (document.hidden) {
-                alert("Warning: Leaving exam tab is logged for anti-cheat tracking.");
+                alert("Warning: Leaving the exam tab is logged for anti-cheat tracking.");
             }
         });
     </script>
-    {% endblock %}
     ''', questions=q_list, subject=subject)
+    
+    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
 
 @app.route('/submit_exam', methods=['POST'])
 def submit_exam():
@@ -284,29 +280,30 @@ def submit_exam():
     conn.commit()
     conn.close()
     
-    return render_template_string(BASE_LAYOUT + '''
-    {% block content %}
+    content = render_template_string('''
     <div style="text-align:center; padding:30px;">
         <h2 style="color:#27ae60;">Exam Successfully Completed!</h2>
-        <p>Student: <strong>{{ session['user_name'] }}</strong></p>
+        <p>Student: <strong>{{ user_name }}</strong></p>
         <p>Subject: <strong>{{ subject }}</strong></p>
         <div style="font-size:42px; margin:20px 0; font-weight:bold;">Score: {{ score }} / {{ total }}</div>
         <a href="/student/dashboard" class="btn">Return to Dashboard</a>
     </div>
-    {% endblock %}
-    ''', subject=subject, score=score, total=total)
+    ''', user_name=session['user_name'], subject=subject, score=score, total=total)
+    
+    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
 
-# --- ADMIN DASHBOARD & USER MANAGEMENT ---
+# --- ADMIN CONTROL CENTER ---
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
     if request.method == 'POST':
-        if request.form.get('password') == 'admin123': # Default initial password
+        if request.form.get('password') == 'admin123':
             session['user'] = 'admin'
             session['user_name'] = 'Administrator'
             return redirect('/admin/dashboard')
-    return render_template_string(BASE_LAYOUT + '''
-    {% block content %}
+        flash('Incorrect Passcode')
+        
+    content = '''
     <h2>Admin Login</h2>
     <form method="POST">
         <div class="form-group">
@@ -315,8 +312,8 @@ def admin_login():
         </div>
         <button type="submit" class="btn btn-danger">Admin Access</button>
     </form>
-    {% endblock %}
-    ''')
+    '''
+    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
 
 @app.route('/admin/dashboard')
 def admin_dashboard():
@@ -325,23 +322,29 @@ def admin_dashboard():
         
     conn = get_db_connection()
     students = conn.execute('SELECT * FROM students').fetchall()
-    teachers = conn.execute('SELECT * FROM teachers').fetchall()
     results = conn.execute('SELECT * FROM results').fetchall()
     conn.close()
     
-    return render_template_string(BASE_LAYOUT + '''
-    {% block content %}
+    content = render_template_string('''
     <h2>Admin Control Center</h2>
     
     <h3>Add New Student</h3>
-    <form action="/admin/add_student" method="POST" style="display:flex; gap:10px; margin-bottom:20px;">
-        <input type="text" name="fullname" placeholder="Full Name" required>
-        <input type="text" name="reg_number" placeholder="Reg Number" required>
-        <select name="class_level">
+    <form action="/admin/add_student" method="POST" style="display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap;">
+        <input type="text" name="fullname" placeholder="Full Name" required style="flex:1;">
+        <input type="text" name="reg_number" placeholder="Reg Number" required style="flex:1;">
+        <select name="class_level" style="flex:1;">
             <option value="Primary 1">Primary 1</option>
+            <option value="Primary 2">Primary 2</option>
+            <option value="Primary 3">Primary 3</option>
+            <option value="Primary 4">Primary 4</option>
             <option value="Primary 5">Primary 5</option>
+            <option value="Primary 6">Primary 6</option>
             <option value="JSS 1">JSS 1</option>
+            <option value="JSS 2">JSS 2</option>
+            <option value="JSS 3">JSS 3</option>
+            <option value="SSS 1">SSS 1</option>
             <option value="SSS 2">SSS 2</option>
+            <option value="SSS 3">SSS 3</option>
         </select>
         <button type="submit" class="btn btn-success">Add Student</button>
     </form>
@@ -355,7 +358,7 @@ def admin_dashboard():
             <td>{{ s['fullname'] }}</td>
             <td>{{ s['class_level'] }}</td>
             <td>
-                <form action="/admin/delete_student/{{ s['id'] }}" method="POST" onsubmit="return confirm('Delete {{ s['fullname'] }}?');">
+                <form action="/admin/delete_student/{{ s['id'] }}" method="POST" onsubmit="return confirm('Delete {{ s['fullname'] }}?');" style="margin:0;">
                     <button type="submit" class="btn btn-danger">Delete</button>
                 </form>
             </td>
@@ -363,15 +366,16 @@ def admin_dashboard():
         {% endfor %}
     </table>
     
-    <h3 style="margin-top:30px;">School Master Results Record</h3>
+    <h3 style="margin-top:30px;">Master Results Record</h3>
     <table>
         <tr><th>Student</th><th>Class</th><th>Subject</th><th>Score</th><th>Date</th></tr>
         {% for r in results %}
         <tr><td>{{ r['student_name'] }}</td><td>{{ r['class_level'] }}</td><td>{{ r['subject'] }}</td><td>{{ r['score'] }}/{{ r['total_questions'] }}</td><td>{{ r['date_taken'] }}</td></tr>
         {% endfor %}
     </table>
-    {% endblock %}
-    ''', students=students, teachers=teachers, results=results)
+    ''', students=students, results=results)
+    
+    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
 
 @app.route('/admin/add_student', methods=['POST'])
 def add_student():
