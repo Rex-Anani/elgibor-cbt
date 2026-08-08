@@ -6,19 +6,19 @@ import datetime
 import os
 
 app = Flask(__name__)
+
+# 1. SET CONFIGURATIONS FIRST
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'elgibor_super_secret_key_2026')
+
 db_url = os.environ.get('DATABASE_URL', 'sqlite:///cbt_engine.db')
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
-app.config['SQLALCHEMY_DATABASE_URI'] = db_urldb = SQLAlchemy(app)
 
-# ==========================================
-# DATABASE MODELS
-# ==========================================
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
+# 2. INITIALIZE SQLALCHEMY AFTER CONFIG IS SET
+db = SQLAlchemy(app)    username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     role = db.Column(db.String(30), nullable=False) # 'super_admin', 'school_admin', 'teacher', 'student'
     full_name = db.Column(db.String(120), nullable=False)
