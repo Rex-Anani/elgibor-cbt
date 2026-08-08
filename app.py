@@ -7,7 +7,7 @@ import os
 
 app = Flask(__name__)
 
-# 1. SET CONFIGURATIONS FIRST
+# 1. APPLICATION CONFIGURATION
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'elgibor_super_secret_key_2026')
 
 db_url = os.environ.get('DATABASE_URL', 'sqlite:///cbt_engine.db')
@@ -17,12 +17,20 @@ if db_url.startswith("postgres://"):
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# 2. INITIALIZE SQLALCHEMY AFTER CONFIG IS SET
-db = SQLAlchemy(app)    username = db.Column(db.String(80), unique=True, nullable=False)
+# 2. DATABASE INITIALIZATION
+db = SQLAlchemy(app)
+
+# ==========================================
+# DATABASE MODELS
+# ==========================================
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     role = db.Column(db.String(30), nullable=False) # 'super_admin', 'school_admin', 'teacher', 'student'
     full_name = db.Column(db.String(120), nullable=False)
-    class_level = db.Column(db.String(50), nullable=True) # Primary 1-6, JSS 1-3, SSS 1-3
+    class_level = db.Column(db.String(50), nullable=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -32,8 +40,8 @@ db = SQLAlchemy(app)    username = db.Column(db.String(80), unique=True, nullabl
 
 class AcademicSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    session_name = db.Column(db.String(50), nullable=False) # e.g., "2026/2027"
-    term = db.Column(db.String(20), nullable=False) # "1st Term", "2nd Term", "3rd Term"
+    session_name = db.Column(db.String(50), nullable=False)
+    term = db.Column(db.String(20), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
 
 class Question(db.Model):
@@ -45,12 +53,12 @@ class Question(db.Model):
     option_b = db.Column(db.String(200), nullable=False)
     option_c = db.Column(db.String(200), nullable=False)
     option_d = db.Column(db.String(200), nullable=False)
-    correct_option = db.Column(db.String(1), nullable=False) # 'A', 'B', 'C', 'D'
+    correct_option = db.Column(db.String(1), nullable=False)
 
 class Examination(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(120), nullable=False)
-    exam_type = db.Column(db.String(50), nullable=False) # CA, Mid-Term, Terminal, Holiday/Practice
+    exam_type = db.Column(db.String(50), nullable=False)
     subject = db.Column(db.String(80), nullable=False)
     class_level = db.Column(db.String(50), nullable=False)
     duration_minutes = db.Column(db.Integer, default=30)
@@ -72,7 +80,7 @@ class AuditLog(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 # ==========================================
-# HTML TEMPLATES (EMBEDDED)
+# BASE TEMPLATE
 # ==========================================
 
 BASE_LAYOUT = """
@@ -88,7 +96,6 @@ BASE_LAYOUT = """
         .card { border: none; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
         .btn-primary { background-color: #1e3c72; border: none; }
         .btn-primary:hover { background-color: #2a5298; }
-        .unselectable { user-select: none; -webkit-user-select: none; }
     </style>
 </head>
 <body>
@@ -151,7 +158,6 @@ def login():
             session['full_name'] = user.full_name
             session['class_level'] = user.class_level
             
-            # Log login action
             log = AuditLog(user=user.username, action="User logged in")
             db.session.add(log)
             db.session.commit()
@@ -432,8 +438,6 @@ def take_exam(exam_id):
         
     exam = Examination.query.get_or_404(exam_id)
     questions = Question.query.filter_by(subject=exam.subject, class_level=exam.class_level).all()
-    
-    # Shuffle options/questions dynamically per session
     random.shuffle(questions)
     
     return render_template_string("""
@@ -544,48 +548,42 @@ def logout():
     return redirect(url_for('login'))
 
 # ==========================================
-# INITIALIZATION & SEEDING
+# RENDER-SAFE DB SEEDING
 # ==========================================
 
-def init_db():
-    with app.app_context():
-        db.create_all()
-        
-        # Seed default Super Admin (You)
-        if not User.query.filter_by(username='superadmin').first():
-            admin = User(username='superadmin', role='super_admin', full_name='Rex Anani (Super Admin)')
-            admin.set_password('Admin@2026')
-            db.session.add(admin)
-            
-        # Seed default Teacher & Student for testing
-        if not User.query.filter_by(username='teacher1').first():
-            teacher = User(username='teacher1', role='teacher', full_name='Mr. Johnson')
-            teacher.set_password('Teacher@2026')
-            db.session.add(teacher)
+with app.app_context():
+    db.create_all()
+    if not User.query.filter_by(username='superadmin').first():
+        admin = User(username='superadmin', role='super_admin', full_name='Rex Anani (Super Admin)')
+        admin.set_password('Admin@2026')
+        db.session.add(admin)
 
-        if not User.query.filter_by(username='student1').first():
-            student = User(username='student1', role='student', full_name='David Okonkwo', class_level='Primary 4-6')
-            student.set_password('Student@2026')
-            db.session.add(student)
+    if not User.query.filter_by(username='teacher1').first():
+        teacher = User(username='teacher1', role='teacher', full_name='Mr. Johnson')
+        teacher.set_password('Teacher@2026')
+        db.session.add(teacher)
 
-        # Seed sample questions
-        if Question.query.count() == 0:
-            q1 = Question(
-                subject='Mathematics', class_level='Primary 4-6',
-                question_text='What is the square root of 144?',
-                option_a='10', option_b='11', option_c='12', option_d='14',
-                correct_option='C'
-            )
-            q2 = Question(
-                subject='Mathematics', class_level='Primary 4-6',
-                question_text='Solve for x: 2x + 5 = 15',
-                option_a='5', option_b='10', option_c='15', option_d='20',
-                correct_option='A'
-            )
-            db.session.add_all([q1, q2])
+    if not User.query.filter_by(username='student1').first():
+        student = User(username='student1', role='student', full_name='David Okonkwo', class_level='Primary 4-6')
+        student.set_password('Student@2026')
+        db.session.add(student)
 
-        db.session.commit()
+    if Question.query.count() == 0:
+        q1 = Question(
+            subject='Mathematics', class_level='Primary 4-6',
+            question_text='What is the square root of 144?',
+            option_a='10', option_b='11', option_c='12', option_d='14',
+            correct_option='C'
+        )
+        q2 = Question(
+            subject='Mathematics', class_level='Primary 4-6',
+            question_text='Solve for x: 2x + 5 = 15',
+            option_a='5', option_b='10', option_c='15', option_d='20',
+            correct_option='A'
+        )
+        db.session.add_all([q1, q2])
+
+    db.session.commit()
 
 if __name__ == '__main__':
-    init_db()
     app.run(debug=True)
