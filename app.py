@@ -1,407 +1,591 @@
-import os
-import sqlite3
+from flask import Flask, render_template_string, request, redirect, url_for, session, flash, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash, check_password_hash
 import random
-from flask import Flask, render_template_string, request, redirect, url_for, session, flash
+import datetime
+import os
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "elgibor_cbt_production_key_2026")
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'elgibor_super_secret_key_2026')
+db_url = os.environ.get('DATABASE_URL', 'sqlite:///cbt_engine.db')
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = db_urldb = SQLAlchemy(app)
 
-DATABASE = "database.db"
+# ==========================================
+# DATABASE MODELS
+# ==========================================
 
-def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(200), nullable=False)
+    role = db.Column(db.String(30), nullable=False) # 'super_admin', 'school_admin', 'teacher', 'student'
+    full_name = db.Column(db.String(120), nullable=False)
+    class_level = db.Column(db.String(50), nullable=True) # Primary 1-6, JSS 1-3, SSS 1-3
 
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Students Table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            reg_number TEXT UNIQUE NOT NULL,
-            fullname TEXT NOT NULL,
-            class_level TEXT NOT NULL,
-            section TEXT NOT NULL
-        )
-    ''')
-    
-    # Teachers Table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS teachers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fullname TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            subject TEXT NOT NULL
-        )
-    ''')
-    
-    # Questions Table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS questions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            subject TEXT NOT NULL,
-            class_level TEXT NOT NULL,
-            question_text TEXT NOT NULL,
-            option_a TEXT NOT NULL,
-            option_b TEXT NOT NULL,
-            option_c TEXT NOT NULL,
-            option_d TEXT NOT NULL,
-            correct_option TEXT NOT NULL
-        )
-    ''')
-    
-    # Results Table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER,
-            student_name TEXT,
-            class_level TEXT,
-            subject TEXT,
-            score INTEGER,
-            total_questions INTEGER,
-            date_taken TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (student_id) REFERENCES students (id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
 
-init_db()
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
-# --- BASE HTML LAYOUT ---
+class AcademicSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    session_name = db.Column(db.String(50), nullable=False) # e.g., "2026/2027"
+    term = db.Column(db.String(20), nullable=False) # "1st Term", "2nd Term", "3rd Term"
+    is_active = db.Column(db.Boolean, default=True)
 
-HTML_HEADER = '''
+class Question(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    subject = db.Column(db.String(80), nullable=False)
+    class_level = db.Column(db.String(50), nullable=False)
+    question_text = db.Column(db.Text, nullable=False)
+    option_a = db.Column(db.String(200), nullable=False)
+    option_b = db.Column(db.String(200), nullable=False)
+    option_c = db.Column(db.String(200), nullable=False)
+    option_d = db.Column(db.String(200), nullable=False)
+    correct_option = db.Column(db.String(1), nullable=False) # 'A', 'B', 'C', 'D'
+
+class Examination(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(120), nullable=False)
+    exam_type = db.Column(db.String(50), nullable=False) # CA, Mid-Term, Terminal, Holiday/Practice
+    subject = db.Column(db.String(80), nullable=False)
+    class_level = db.Column(db.String(50), nullable=False)
+    duration_minutes = db.Column(db.Integer, default=30)
+    is_published = db.Column(db.Boolean, default=False)
+
+class TestResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    exam_id = db.Column(db.Integer, db.ForeignKey('examination.id'), nullable=False)
+    score = db.Column(db.Float, nullable=False)
+    total_questions = db.Column(db.Integer, nullable=False)
+    percentage = db.Column(db.Float, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+class AuditLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user = db.Column(db.String(80))
+    action = db.Column(db.String(255))
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+# ==========================================
+# HTML TEMPLATES (EMBEDDED)
+# ==========================================
+
+BASE_LAYOUT = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Great Elgibor Schools - CBT Portal</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <title>Great Elgibor Schools - Academic CBT Portal</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 0; }
-        .navbar { background: #1a365d; color: white; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; }
-        .navbar h1 { margin: 0; font-size: 20px; }
-        .container { max-width: 1000px; margin: 30px auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        .btn { padding: 10px 18px; background: #2b6cb0; color: white; border: none; border-radius: 5px; text-decoration: none; cursor: pointer; display: inline-block; }
-        .btn-danger { background: #e53e3e; }
-        .btn-success { background: #38a169; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: left; }
-        th { background: #edf2f7; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-        .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid #cbd5e0; border-radius: 5px; box-sizing: border-box; }
-        .timer-box { font-size: 20px; font-weight: bold; color: #e53e3e; background: #fff5f5; padding: 10px; border: 1px solid #feb2b2; border-radius: 5px; display: inline-block; margin-bottom: 20px; }
+        body { background-color: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .navbar-brand { font-weight: bold; color: #1e3c72 !important; }
+        .card { border: none; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .btn-primary { background-color: #1e3c72; border: none; }
+        .btn-primary:hover { background-color: #2a5298; }
+        .unselectable { user-select: none; -webkit-user-select: none; }
     </style>
 </head>
 <body>
-    <div class="navbar">
-        <h1>Great Elgibor Schools CBT</h1>
-        <div>
-            {% if session.get('user') %}
-                <span>Hello, {{ session['user_name'] }}</span> | 
-                <a href="/logout" style="color:#feb2b2;">Logout</a>
+<nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm mb-4">
+    <div class="container">
+        <a class="navbar-brand" href="#">GREAT ELGIBOR CBT</a>
+        <div class="d-flex align-items-center">
+            {% if session.get('user_id') %}
+                <span class="me-3 text-muted"><strong>{{ session['full_name'] }}</strong> ({{ session['role']|upper }})</span>
+                <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm">Logout</a>
             {% endif %}
         </div>
     </div>
-    <div class="container">
-'''
-
-HTML_FOOTER = '''
-    </div>
+</nav>
+<div class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, msg in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ msg }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+</div>
 </body>
 </html>
-'''
+"""
 
-# --- PUBLIC & PORTAL ROUTES ---
+# ==========================================
+# ROUTES
+# ==========================================
 
 @app.route('/')
 def index():
-    content = '''
-    <h2 style="text-align:center;">Welcome to Great Elgibor Schools CBT Portal</h2>
-    <div style="display:flex; justify-content:space-around; margin-top:40px; flex-wrap:wrap; gap:15px;">
-        <a href="/student/login" class="btn btn-success" style="padding:20px 40px; font-size:18px;">Student Portal</a>
-        <a href="/admin/login" class="btn btn-danger" style="padding:20px 40px; font-size:18px;">Admin Control</a>
-    </div>
-    '''
-    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    role = session.get('role')
+    if role == 'super_admin':
+        return redirect(url_for('super_admin_dashboard'))
+    elif role in ['school_admin', 'teacher']:
+        return redirect(url_for('admin_dashboard'))
+    else:
+        return redirect(url_for('student_dashboard'))
 
-# --- STUDENT PORTAL & EXAM ENGINE ---
-
-@app.route('/student/login', methods=['GET', 'POST'])
-def student_login():
+@app.route('/login', methods=['GET', 'POST'])
+def login():
     if request.method == 'POST':
-        reg_num = request.form.get('reg_number', '').strip()
-        conn = get_db_connection()
-        student = conn.execute('SELECT * FROM students WHERE reg_number = ?', (reg_num,)).fetchone()
-        conn.close()
+        username = request.form['username'].strip()
+        password = request.form['password'].strip()
+        user = User.query.filter_by(username=username).first()
         
-        if student:
-            session['user'] = 'student'
-            session['student_id'] = student['id']
-            session['user_name'] = student['fullname']
-            session['class_level'] = student['class_level']
-            return redirect('/student/dashboard')
-        flash('Invalid Registration Number!')
-        
-    content = '''
-    <h2>Student Login</h2>
-    <form method="POST">
-        <div class="form-group">
-            <label>Registration Number</label>
-            <input type="text" name="reg_number" placeholder="e.g., GES/2026/001" required>
+        if user and user.check_password(password):
+            session['user_id'] = user.id
+            session['username'] = user.username
+            session['role'] = user.role
+            session['full_name'] = user.full_name
+            session['class_level'] = user.class_level
+            
+            # Log login action
+            log = AuditLog(user=user.username, action="User logged in")
+            db.session.add(log)
+            db.session.commit()
+            
+            flash('Welcome back, ' + user.full_name + '!', 'success')
+            return redirect(url_for('index'))
+        else:
+            flash('Invalid username or password', 'danger')
+            
+    return render_template_string(BASE_LAYOUT + """
+    {% block content %}
+    <div class="row justify-content-center mt-5">
+        <div class="col-md-5">
+            <div class="card p-4">
+                <h3 class="text-center mb-4 text-primary">Portal Login</h3>
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">Username / Student ID</label>
+                        <input type="text" name="username" class="form-control" required placeholder="Enter your ID">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" required placeholder="Enter password">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Sign In</button>
+                </form>
+            </div>
         </div>
-        <button type="submit" class="btn btn-success">Start Exam Session</button>
-    </form>
-    '''
-    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
+    </div>
+    {% endblock %}
+    """)
 
-@app.route('/student/dashboard')
-def student_dashboard():
-    if session.get('user') != 'student':
-        return redirect('/student/login')
-        
-    conn = get_db_connection()
-    subjects = conn.execute('SELECT DISTINCT subject FROM questions WHERE class_level = ?', (session['class_level'],)).fetchall()
-    results = conn.execute('SELECT * FROM results WHERE student_id = ?', (session['student_id'],)).fetchall()
-    conn.close()
+@app.route('/super-admin')
+def super_admin_dashboard():
+    if session.get('role') != 'super_admin':
+        flash('Unauthorized access', 'danger')
+        return redirect(url_for('index'))
     
-    content = render_template_string('''
-    <h2>Student Dashboard ({{ class_level }})</h2>
-    <h3>Available Tests</h3>
-    <ul>
-    {% for s in subjects %}
-        <li><strong>{{ s['subject'] }}</strong> - <a href="/exam/take/{{ s['subject'] }}" class="btn">Take Exam</a></li>
-    {% else %}
-        <p>No exams currently set up for your class level.</p>
-    {% endfor %}
-    </ul>
+    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(20).all()
+    users_count = User.query.count()
+    exams_count = Examination.query.count()
     
-    <h3 style="margin-top:30px;">Past Results</h3>
-    <table>
-        <tr><th>Subject</th><th>Score</th><th>Date</th></tr>
-        {% for r in results %}
-        <tr><td>{{ r['subject'] }}</td><td>{{ r['score'] }} / {{ r['total_questions'] }}</td><td>{{ r['date_taken'] }}</td></tr>
-        {% endfor %}
-    </table>
-    ''', class_level=session['class_level'], subjects=subjects, results=results)
-    
-    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
-
-@app.route('/exam/take/<subject>')
-def take_exam(subject):
-    if session.get('user') != 'student':
-        return redirect('/student/login')
-        
-    conn = get_db_connection()
-    questions = conn.execute('SELECT * FROM questions WHERE subject = ? AND class_level = ?', 
-                             (subject, session['class_level'])).fetchall()
-    conn.close()
-    
-    if not questions:
-        return redirect('/student/dashboard')
-        
-    q_list = [dict(q) for q in questions]
-    random.shuffle(q_list)
-    
-    content = render_template_string('''
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h2>Exam: {{ subject }}</h2>
-        <div class="timer-box">Time Remaining: <span id="time">15:00</span></div>
+    return render_template_string(BASE_LAYOUT + """
+    {% block content %}
+    <h2 class="mb-4">Super Admin Control Center</h2>
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card p-3 bg-primary text-white">
+                <h5>Total Users Registered</h5>
+                <h3>{{ users_count }}</h3>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card p-3 bg-success text-white">
+                <h5>Total Examinations</h5>
+                <h3>{{ exams_count }}</h3>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card p-3 bg-dark text-white">
+                <h5>System Status</h5>
+                <h3>Active / Healthy</h3>
+            </div>
+        </div>
     </div>
     
-    <form id="examForm" action="/submit_exam" method="POST">
-        <input type="hidden" name="subject" value="{{ subject }}">
-        {% for q in questions %}
-        <div style="background:#f7fafc; padding:15px; border-radius:8px; margin-bottom:20px;">
-            <p><strong>Q{{ loop.index }}: {{ q['question_text'] }}</strong></p>
-            <label><input type="radio" name="question_{{ q['id'] }}" value="A"> A) {{ q['option_a'] }}</label><br>
-            <label><input type="radio" name="question_{{ q['id'] }}" value="B"> B) {{ q['option_b'] }}</label><br>
-            <label><input type="radio" name="question_{{ q['id'] }}" value="C"> C) {{ q['option_c'] }}</label><br>
-            <label><input type="radio" name="question_{{ q['id'] }}" value="D"> D) {{ q['option_d'] }}</label>
+    <div class="card p-4 mb-4">
+        <h4>System Audit Logs</h4>
+        <table class="table table-striped table-hover mt-3">
+            <thead>
+                <tr>
+                    <th>User</th>
+                    <th>Action</th>
+                    <th>Timestamp (UTC)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.user }}</td>
+                    <td>{{ log.action }}</td>
+                    <td>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endblock %}
+    """, logs=logs, users_count=users_count, exams_count=exams_count)
+
+@app.route('/admin')
+def admin_dashboard():
+    if session.get('role') not in ['school_admin', 'teacher', 'super_admin']:
+        flash('Access restricted to staff only', 'danger')
+        return redirect(url_for('index'))
+        
+    exams = Examination.query.all()
+    questions_count = Question.query.count()
+    
+    return render_template_string(BASE_LAYOUT + """
+    {% block content %}
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Academic & Examination Management</h2>
+        <a href="{{ url_for('create_exam') }}" class="btn btn-primary">+ Create New Exam</a>
+    </div>
+    
+    <div class="card p-4">
+        <h4>Active & Scheduled Exams</h4>
+        <table class="table table-bordered mt-3">
+            <thead class="table-light">
+                <tr>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Subject</th>
+                    <th>Class Level</th>
+                    <th>Duration</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for exam in exams %}
+                <tr>
+                    <td>{{ exam.title }}</td>
+                    <td><span class="badge bg-info text-dark">{{ exam.exam_type }}</span></td>
+                    <td>{{ exam.subject }}</td>
+                    <td>{{ exam.class_level }}</td>
+                    <td>{{ exam.duration_minutes }} mins</td>
+                    <td>
+                        {% if exam.is_published %}
+                            <span class="badge bg-success">Published</span>
+                        {% else %}
+                            <span class="badge bg-secondary">Draft</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endblock %}
+    """, exams=exams, questions_count=questions_count)
+
+@app.route('/create-exam', methods=['GET', 'POST'])
+def create_exam():
+    if session.get('role') not in ['school_admin', 'teacher', 'super_admin']:
+        return redirect(url_for('index'))
+        
+    if request.method == 'POST':
+        title = request.form['title']
+        exam_type = request.form['exam_type']
+        subject = request.form['subject']
+        class_level = request.form['class_level']
+        duration = int(request.form['duration'])
+        
+        exam = Examination(
+            title=title, exam_type=exam_type, subject=subject, 
+            class_level=class_level, duration_minutes=duration, is_published=True
+        )
+        db.session.add(exam)
+        db.session.commit()
+        
+        flash('Examination created and published successfully!', 'success')
+        return redirect(url_for('admin_dashboard'))
+        
+    return render_template_string(BASE_LAYOUT + """
+    {% block content %}
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card p-4">
+                <h4>Create New Examination</h4>
+                <form method="POST" class="mt-3">
+                    <div class="mb-3">
+                        <label class="form-label">Exam Title</label>
+                        <input type="text" name="title" class="form-control" placeholder="e.g., 1st Term Mathematics Test" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Exam Category</label>
+                        <select name="exam_type" class="form-select" required>
+                            <option value="Continuous Assessment">Continuous Assessment (CA)</option>
+                            <option value="Mid-Term Test">Mid-Term Test</option>
+                            <option value="Terminal Exam">Terminal Examination</option>
+                            <option value="Holiday Practice">Holiday Practice / Revision</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Subject</label>
+                        <input type="text" name="subject" class="form-control" placeholder="e.g., Mathematics" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Target Class</label>
+                        <select name="class_level" class="form-select" required>
+                            <option value="Primary 1-3">Primary 1 - 3</option>
+                            <option value="Primary 4-6">Primary 4 - 6</option>
+                            <option value="JSS 1-3">Junior Secondary (JSS 1-3)</option>
+                            <option value="SSS 1-3">Senior Secondary (SSS 1-3)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Duration (Minutes)</label>
+                        <input type="number" name="duration" class="form-control" value="30" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Save & Publish Exam</button>
+                </form>
+            </div>
         </div>
-        {% endfor %}
-        <button type="submit" class="btn btn-success" style="width:100%; font-size:18px;">Submit Final Answers</button>
-    </form>
+    </div>
+    {% endblock %}
+    """)
+
+@app.route('/student')
+def student_dashboard():
+    if session.get('role') != 'student':
+        return redirect(url_for('index'))
+        
+    student_class = session.get('class_level')
+    available_exams = Examination.query.filter_by(class_level=student_class, is_published=True).all()
+    past_results = TestResult.query.filter_by(student_id=session['user_id']).all()
+    
+    return render_template_string(BASE_LAYOUT + """
+    {% block content %}
+    <h2 class="mb-4">Student Assessment Dashboard</h2>
+    <div class="row">
+        <div class="col-md-7">
+            <div class="card p-4 mb-4">
+                <h4>Available Examinations</h4>
+                {% if available_exams %}
+                    <ul class="list-group mt-3">
+                    {% for exam in available_exams %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>{{ exam.title }}</strong><br>
+                                <small class="text-muted">{{ exam.subject }} | {{ exam.duration_minutes }} mins</small>
+                            </div>
+                            <a href="{{ url_for('take_exam', exam_id=exam.id) }}" class="btn btn-sm btn-primary">Start Exam</a>
+                        </li>
+                    {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="text-muted mt-2">No active examinations scheduled for your class at the moment.</p>
+                {% endif %}
+            </div>
+        </div>
+        <div class="col-md-5">
+            <div class="card p-4">
+                <h4>Your Exam Results</h4>
+                {% if past_results %}
+                    <table class="table table-sm mt-3">
+                        <thead>
+                            <tr>
+                                <th>Exam ID</th>
+                                <th>Score</th>
+                                <th>Grade</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for res in past_results %}
+                            <tr>
+                                <td>Exam #{{ res.exam_id }}</td>
+                                <td>{{ res.score }} / {{ res.total_questions }}</td>
+                                <td><strong>{{ res.percentage }}%</strong></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p class="text-muted mt-2">No exam results recorded yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endblock %}
+    """, available_exams=available_exams, past_results=past_results)
+
+@app.route('/take-exam/<int:exam_id>')
+def take_exam(exam_id):
+    if session.get('role') != 'student':
+        return redirect(url_for('index'))
+        
+    exam = Examination.query.get_or_404(exam_id)
+    questions = Question.query.filter_by(subject=exam.subject, class_level=exam.class_level).all()
+    
+    # Shuffle options/questions dynamically per session
+    random.shuffle(questions)
+    
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Taking Exam: {{ exam.title }}</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            body { user-select: none; background-color: #f8f9fa; }
+            .timer-box { position: fixed; top: 20px; right: 20px; background: #dc3545; color: white; padding: 10px 20px; border-radius: 5px; font-weight: bold; }
+        </style>
+    </head>
+    <body oncopy="return false" onpaste="return false" oncontextmenu="return false">
+    
+    <div class="timer-box" id="timer">Time Remaining: --:--</div>
+    
+    <div class="container my-5">
+        <div class="card p-4 shadow-sm">
+            <h3>{{ exam.title }} ({{ exam.subject }})</h3>
+            <p class="text-muted">Class: {{ exam.class_level }} | Total Questions: {{ questions|length }}</p>
+            <hr>
+            
+            <form id="examForm" action="{{ url_for('submit_exam', exam_id=exam.id) }}" method="POST">
+                {% for q in questions %}
+                <div class="mb-4">
+                    <h5>Q{{ loop.index }}. {{ q.question_text }}</h5>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="A" id="q{{ q.id }}a">
+                        <label class="form-check-label" for="q{{ q.id }}a">A) {{ q.option_a }}</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="B" id="q{{ q.id }}b">
+                        <label class="form-check-label" for="q{{ q.id }}b">B) {{ q.option_b }}</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="C" id="q{{ q.id }}c">
+                        <label class="form-check-label" for="q{{ q.id }}c">C) {{ q.option_c }}</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="D" id="q{{ q.id }}d">
+                        <label class="form-check-label" for="q{{ q.id }}d">D) {{ q.option_d }}</label>
+                    </div>
+                </div>
+                {% endfor %}
+                <button type="submit" class="btn btn-success btn-lg w-100">Submit Answers</button>
+            </form>
+        </div>
+    </div>
 
     <script>
-        var duration = 15 * 60;
-        var display = document.querySelector('#time');
-        var timer = setInterval(function () {
-            var minutes = parseInt(duration / 60, 10);
-            var seconds = parseInt(duration % 60, 10);
-            minutes = minutes < 10 ? "0" + minutes : minutes;
-            seconds = seconds < 10 ? "0" + seconds : seconds;
-            display.textContent = minutes + ":" + seconds;
-            if (--duration < 0) {
-                clearInterval(timer);
-                alert("Time is up! Submitting automatically.");
-                document.getElementById("examForm").submit();
-            }
-        }, 1000);
-
-        document.addEventListener("visibilitychange", function() {
-            if (document.hidden) {
-                alert("Warning: Leaving the exam tab is logged for anti-cheat tracking.");
-            }
-        });
-    </script>
-    ''', questions=q_list, subject=subject)
-    
-    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
-
-@app.route('/submit_exam', methods=['POST'])
-def submit_exam():
-    if session.get('user') != 'student':
-        return redirect('/student/login')
+        let durationMinutes = {{ exam.duration_minutes }};
+        let secondsLeft = durationMinutes * 60;
         
-    subject = request.form.get('subject')
-    conn = get_db_connection()
-    questions = conn.execute('SELECT * FROM questions WHERE subject = ? AND class_level = ?', 
-                             (subject, session['class_level'])).fetchall()
+        let timerInterval = setInterval(function() {
+            let minutes = Math.floor(secondsLeft / 60);
+            let seconds = secondsLeft % 60;
+            document.getElementById('timer').innerText = `Time Remaining: ${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+            
+            if (secondsLeft <= 0) {
+                clearInterval(timerInterval);
+                alert("Time is up! Your examination will be submitted automatically.");
+                document.getElementById('examForm').submit();
+            }
+            secondsLeft--;
+        }, 1000);
+    </script>
+    </body>
+    </html>
+    """, exam=exam, questions=questions)
+
+@app.route('/submit-exam/<int:exam_id>', methods=['POST'])
+def submit_exam(exam_id):
+    if session.get('role') != 'student':
+        return redirect(url_for('index'))
+        
+    exam = Examination.query.get_or_404(exam_id)
+    questions = Question.query.filter_by(subject=exam.subject, class_level=exam.class_level).all()
     
     score = 0
     total = len(questions)
     
     for q in questions:
-        selected = request.form.get(f'question_{q["id"]}')
-        if selected and selected.strip().upper() == q['correct_option'].strip().upper():
+        selected_option = request.form.get(f'q_{q.id}')
+        if selected_option and selected_option == q.correct_option:
             score += 1
             
-    conn.execute('''
-        INSERT INTO results (student_id, student_name, class_level, subject, score, total_questions)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (session['student_id'], session['user_name'], session['class_level'], subject, score, total))
-    conn.commit()
-    conn.close()
+    percentage = round((score / total) * 100, 2) if total > 0 else 0
     
-    content = render_template_string('''
-    <div style="text-align:center; padding:30px;">
-        <h2 style="color:#27ae60;">Exam Successfully Completed!</h2>
-        <p>Student: <strong>{{ user_name }}</strong></p>
-        <p>Subject: <strong>{{ subject }}</strong></p>
-        <div style="font-size:42px; margin:20px 0; font-weight:bold;">Score: {{ score }} / {{ total }}</div>
-        <a href="/student/dashboard" class="btn">Return to Dashboard</a>
-    </div>
-    ''', user_name=session['user_name'], subject=subject, score=score, total=total)
+    res = TestResult(
+        student_id=session['user_id'],
+        exam_id=exam.id,
+        score=score,
+        total_questions=total,
+        percentage=percentage
+    )
+    db.session.add(res)
+    db.session.commit()
     
-    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
-
-# --- ADMIN CONTROL CENTER ---
-
-@app.route('/admin/login', methods=['GET', 'POST'])
-def admin_login():
-    if request.method == 'POST':
-        if request.form.get('password') == 'admin123':
-            session['user'] = 'admin'
-            session['user_name'] = 'Administrator'
-            return redirect('/admin/dashboard')
-        flash('Incorrect Passcode')
-        
-    content = '''
-    <h2>Admin Login</h2>
-    <form method="POST">
-        <div class="form-group">
-            <label>Master Passcode</label>
-            <input type="password" name="password" required>
-        </div>
-        <button type="submit" class="btn btn-danger">Admin Access</button>
-    </form>
-    '''
-    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
-
-@app.route('/admin/dashboard')
-def admin_dashboard():
-    if session.get('user') != 'admin':
-        return redirect('/admin/login')
-        
-    conn = get_db_connection()
-    students = conn.execute('SELECT * FROM students').fetchall()
-    results = conn.execute('SELECT * FROM results').fetchall()
-    conn.close()
-    
-    content = render_template_string('''
-    <h2>Admin Control Center</h2>
-    
-    <h3>Add New Student</h3>
-    <form action="/admin/add_student" method="POST" style="display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap;">
-        <input type="text" name="fullname" placeholder="Full Name" required style="flex:1;">
-        <input type="text" name="reg_number" placeholder="Reg Number" required style="flex:1;">
-        <select name="class_level" style="flex:1;">
-            <option value="Primary 1">Primary 1</option>
-            <option value="Primary 2">Primary 2</option>
-            <option value="Primary 3">Primary 3</option>
-            <option value="Primary 4">Primary 4</option>
-            <option value="Primary 5">Primary 5</option>
-            <option value="Primary 6">Primary 6</option>
-            <option value="JSS 1">JSS 1</option>
-            <option value="JSS 2">JSS 2</option>
-            <option value="JSS 3">JSS 3</option>
-            <option value="SSS 1">SSS 1</option>
-            <option value="SSS 2">SSS 2</option>
-            <option value="SSS 3">SSS 3</option>
-        </select>
-        <button type="submit" class="btn btn-success">Add Student</button>
-    </form>
-
-    <h3>Student Registry</h3>
-    <table>
-        <tr><th>Reg No</th><th>Name</th><th>Class</th><th>Action</th></tr>
-        {% for s in students %}
-        <tr>
-            <td>{{ s['reg_number'] }}</td>
-            <td>{{ s['fullname'] }}</td>
-            <td>{{ s['class_level'] }}</td>
-            <td>
-                <form action="/admin/delete_student/{{ s['id'] }}" method="POST" onsubmit="return confirm('Delete {{ s['fullname'] }}?');" style="margin:0;">
-                    <button type="submit" class="btn btn-danger">Delete</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
-    
-    <h3 style="margin-top:30px;">Master Results Record</h3>
-    <table>
-        <tr><th>Student</th><th>Class</th><th>Subject</th><th>Score</th><th>Date</th></tr>
-        {% for r in results %}
-        <tr><td>{{ r['student_name'] }}</td><td>{{ r['class_level'] }}</td><td>{{ r['subject'] }}</td><td>{{ r['score'] }}/{{ r['total_questions'] }}</td><td>{{ r['date_taken'] }}</td></tr>
-        {% endfor %}
-    </table>
-    ''', students=students, results=results)
-    
-    return render_template_string(HTML_HEADER + content + HTML_FOOTER)
-
-@app.route('/admin/add_student', methods=['POST'])
-def add_student():
-    if session.get('user') == 'admin':
-        conn = get_db_connection()
-        conn.execute('INSERT INTO students (fullname, reg_number, class_level, section) VALUES (?, ?, ?, ?)',
-                     (request.form['fullname'], request.form['reg_number'], request.form['class_level'], 'General'))
-        conn.commit()
-        conn.close()
-    return redirect('/admin/dashboard')
-
-@app.route('/admin/delete_student/<int:student_id>', methods=['POST'])
-def delete_student(student_id):
-    if session.get('user') == 'admin':
-        conn = get_db_connection()
-        conn.execute('DELETE FROM students WHERE id = ?', (student_id,))
-        conn.commit()
-        conn.close()
-    return redirect('/admin/dashboard')
+    flash(f'Exam submitted successfully! You scored {score}/{total} ({percentage}%).', 'success')
+    return redirect(url_for('student_dashboard'))
 
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect('/')
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('login'))
 
-# --- PORT BINDING ---
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+# ==========================================
+# INITIALIZATION & SEEDING
+# ==========================================
+
+def init_db():
+    with app.app_context():
+        db.create_all()
+        
+        # Seed default Super Admin (You)
+        if not User.query.filter_by(username='superadmin').first():
+            admin = User(username='superadmin', role='super_admin', full_name='Rex Anani (Super Admin)')
+            admin.set_password('Admin@2026')
+            db.session.add(admin)
+            
+        # Seed default Teacher & Student for testing
+        if not User.query.filter_by(username='teacher1').first():
+            teacher = User(username='teacher1', role='teacher', full_name='Mr. Johnson')
+            teacher.set_password('Teacher@2026')
+            db.session.add(teacher)
+
+        if not User.query.filter_by(username='student1').first():
+            student = User(username='student1', role='student', full_name='David Okonkwo', class_level='Primary 4-6')
+            student.set_password('Student@2026')
+            db.session.add(student)
+
+        # Seed sample questions
+        if Question.query.count() == 0:
+            q1 = Question(
+                subject='Mathematics', class_level='Primary 4-6',
+                question_text='What is the square root of 144?',
+                option_a='10', option_b='11', option_c='12', option_d='14',
+                correct_option='C'
+            )
+            q2 = Question(
+                subject='Mathematics', class_level='Primary 4-6',
+                question_text='Solve for x: 2x + 5 = 15',
+                option_a='5', option_b='10', option_c='15', option_d='20',
+                correct_option='A'
+            )
+            db.session.add_all([q1, q2])
+
+        db.session.commit()
+
+if __name__ == '__main__':
+    init_db()
+    app.run(debug=True)
