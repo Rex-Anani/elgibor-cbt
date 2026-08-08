@@ -1,1 +1,4 @@
-flask
+Flask
+Flask-SQLAlchemy
+Werkzeug
+gunicorn
