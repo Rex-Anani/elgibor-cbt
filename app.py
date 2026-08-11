@@ -2,12 +2,14 @@ from flask import Flask, render_template_string, request, redirect, url_for, ses
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import random
-import datetime
+from datetime import datetime, timedelta
 import os
 
 app = Flask(__name__)
 
+# ==========================================
 # 1. APPLICATION CONFIGURATION
+# ==========================================
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'elgibor_super_secret_key_2026')
 
 db_url = os.environ.get('DATABASE_URL', 'sqlite:///cbt_engine.db')
@@ -17,18 +19,22 @@ if db_url.startswith("postgres://"):
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# 2. DATABASE INITIALIZATION
+# Initialize SQLAlchemy after configuration
 db = SQLAlchemy(app)
 
+# Helper for WAT (UTC+1) local timestamps
+def get_local_time():
+    return datetime.utcnow() + timedelta(hours=1)
+
 # ==========================================
-# DATABASE MODELS
+# 2. DATABASE MODELS
 # ==========================================
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
-    role = db.Column(db.String(30), nullable=False) # 'super_admin', 'school_admin', 'teacher', 'student'
+    role = db.Column(db.String(30), nullable=False)  # 'super_admin', 'school_admin', 'teacher', 'student'
     full_name = db.Column(db.String(120), nullable=False)
     class_level = db.Column(db.String(50), nullable=True)
 
@@ -71,16 +77,16 @@ class TestResult(db.Model):
     score = db.Column(db.Float, nullable=False)
     total_questions = db.Column(db.Integer, nullable=False)
     percentage = db.Column(db.Float, nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=get_local_time)
 
 class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user = db.Column(db.String(80))
     action = db.Column(db.String(255))
-    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=get_local_time)
 
 # ==========================================
-# BASE TEMPLATE
+# 3. BASE LAYOUT TEMPLATE
 # ==========================================
 
 BASE_LAYOUT = """
@@ -128,7 +134,7 @@ BASE_LAYOUT = """
 """
 
 # ==========================================
-# ROUTES
+# 4. ROUTES
 # ==========================================
 
 @app.route('/')
@@ -145,29 +151,6 @@ def index():
         return redirect(url_for('student_dashboard'))
 
 @app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username'].strip()
-        password = request.form['password'].strip()
-        user = User.query.filter_by(username=username).first()
-        
-        if user and user.check_password(password):
-            session['user_id'] = user.id
-            session['username'] = user.username
-            session['role'] = user.role
-            session['full_name'] = user.full_name
-            session['class_level'] = user.class_level
-            
-            log = AuditLog(user=user.username, action="User logged in")
-            db.session.add(log)
-            db.session.commit()
-            
-            flash('Welcome back, ' + user.full_name + '!', 'success')
-            return redirect(url_for('index'))
-        else:
-            flash('Invalid username or password', 'danger')
-            
-  @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form['username'].strip()
@@ -245,6 +228,7 @@ def login():
     </body>
     </html>
     """)
+
 @app.route('/super-admin')
 def super_admin_dashboard():
     if session.get('role') != 'super_admin':
@@ -280,13 +264,13 @@ def super_admin_dashboard():
     </div>
     
     <div class="card p-4 mb-4">
-        <h4>System Audit Logs</h4>
+        <h4>System Audit Logs (WAT)</h4>
         <table class="table table-striped table-hover mt-3">
             <thead>
                 <tr>
                     <th>User</th>
                     <th>Action</th>
-                    <th>Timestamp (UTC)</th>
+                    <th>Timestamp</th>
                 </tr>
             </thead>
             <tbody>
@@ -603,10 +587,8 @@ def logout():
     return redirect(url_for('login'))
 
 # ==========================================
-# RENDER-SAFE DB SEEDING
+# 5. SAFE DATABASE INITIALIZATION
 # ==========================================
-
-# Replace the database seeding block near the bottom of app.py with this:
 
 def init_db():
     with app.app_context():
@@ -643,7 +625,6 @@ def init_db():
 
         db.session.commit()
 
-# Call initialization safely
 init_db()
 
 if __name__ == '__main__':
