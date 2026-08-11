@@ -167,29 +167,61 @@ def login():
         else:
             flash('Invalid username or password', 'danger')
             
-    return render_template_string(BASE_LAYOUT + """
-    {% block content %}
-    <div class="row justify-content-center mt-5">
-        <div class="col-md-5">
-            <div class="card p-4">
-                <h3 class="text-center mb-4 text-primary">Portal Login</h3>
-                <form method="POST">
-                    <div class="mb-3">
-                        <label class="form-label">Username / Student ID</label>
-                        <input type="text" name="username" class="form-control" required placeholder="Enter your ID">
+   return render_template_string("""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Great Elgibor Schools - Academic CBT Portal</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            body { background-color: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+            .navbar-brand { font-weight: bold; color: #1e3c72 !important; }
+            .card { border: none; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+            .btn-primary { background-color: #1e3c72; border: none; }
+            .btn-primary:hover { background-color: #2a5298; }
+        </style>
+    </head>
+    <body>
+    <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="#">GREAT ELGIBOR CBT</a>
+        </div>
+    </nav>
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, msg in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ msg }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Password</label>
-                        <input type="password" name="password" class="form-control" required placeholder="Enter password">
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100">Sign In</button>
-                </form>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <div class="row justify-content-center mt-5">
+            <div class="col-md-5">
+                <div class="card p-4">
+                    <h3 class="text-center mb-4 text-primary">Portal Login</h3>
+                    <form method="POST">
+                        <div class="mb-3">
+                            <label class="form-label">Username / Student ID</label>
+                            <input type="text" name="username" class="form-control" required placeholder="Enter your ID">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Password</label>
+                            <input type="password" name="password" class="form-control" required placeholder="Enter password">
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">Sign In</button>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
-    {% endblock %}
+    </body>
+    </html>
     """)
-
 @app.route('/super-admin')
 def super_admin_dashboard():
     if session.get('role') != 'super_admin':
