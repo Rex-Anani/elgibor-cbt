@@ -167,7 +167,30 @@ def login():
         else:
             flash('Invalid username or password', 'danger')
             
-   return render_template_string("""
+  @app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username'].strip()
+        password = request.form['password'].strip()
+        user = User.query.filter_by(username=username).first()
+        
+        if user and user.check_password(password):
+            session['user_id'] = user.id
+            session['username'] = user.username
+            session['role'] = user.role
+            session['full_name'] = user.full_name
+            session['class_level'] = user.class_level
+            
+            log = AuditLog(user=user.username, action="User logged in")
+            db.session.add(log)
+            db.session.commit()
+            
+            flash('Welcome back, ' + user.full_name + '!', 'success')
+            return redirect(url_for('index'))
+        else:
+            flash('Invalid username or password', 'danger')
+            
+    return render_template_string("""
     <!DOCTYPE html>
     <html lang="en">
     <head>
