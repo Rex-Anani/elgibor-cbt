@@ -583,39 +583,45 @@ def logout():
 # RENDER-SAFE DB SEEDING
 # ==========================================
 
-with app.app_context():
-    db.create_all()
-    if not User.query.filter_by(username='superadmin').first():
-        admin = User(username='superadmin', role='super_admin', full_name='Rex Anani (Super Admin)')
-        admin.set_password('Admin@2026')
-        db.session.add(admin)
+# Replace the database seeding block near the bottom of app.py with this:
 
-    if not User.query.filter_by(username='teacher1').first():
-        teacher = User(username='teacher1', role='teacher', full_name='Mr. Johnson')
-        teacher.set_password('Teacher@2026')
-        db.session.add(teacher)
+def init_db():
+    with app.app_context():
+        db.create_all()
+        if not User.query.filter_by(username='superadmin').first():
+            admin = User(username='superadmin', role='super_admin', full_name='Rex Anani (Super Admin)')
+            admin.set_password('Admin@2026')
+            db.session.add(admin)
 
-    if not User.query.filter_by(username='student1').first():
-        student = User(username='student1', role='student', full_name='David Okonkwo', class_level='Primary 4-6')
-        student.set_password('Student@2026')
-        db.session.add(student)
+        if not User.query.filter_by(username='teacher1').first():
+            teacher = User(username='teacher1', role='teacher', full_name='Mr. Johnson')
+            teacher.set_password('Teacher@2026')
+            db.session.add(teacher)
 
-    if Question.query.count() == 0:
-        q1 = Question(
-            subject='Mathematics', class_level='Primary 4-6',
-            question_text='What is the square root of 144?',
-            option_a='10', option_b='11', option_c='12', option_d='14',
-            correct_option='C'
-        )
-        q2 = Question(
-            subject='Mathematics', class_level='Primary 4-6',
-            question_text='Solve for x: 2x + 5 = 15',
-            option_a='5', option_b='10', option_c='15', option_d='20',
-            correct_option='A'
-        )
-        db.session.add_all([q1, q2])
+        if not User.query.filter_by(username='student1').first():
+            student = User(username='student1', role='student', full_name='David Okonkwo', class_level='Primary 4-6')
+            student.set_password('Student@2026')
+            db.session.add(student)
 
-    db.session.commit()
+        if Question.query.count() == 0:
+            q1 = Question(
+                subject='Mathematics', class_level='Primary 4-6',
+                question_text='What is the square root of 144?',
+                option_a='10', option_b='11', option_c='12', option_d='14',
+                correct_option='C'
+            )
+            q2 = Question(
+                subject='Mathematics', class_level='Primary 4-6',
+                question_text='Solve for x: 2x + 5 = 15',
+                option_a='5', option_b='10', option_c='15', option_d='20',
+                correct_option='A'
+            )
+            db.session.add_all([q1, q2])
+
+        db.session.commit()
+
+# Call initialization safely
+init_db()
 
 if __name__ == '__main__':
     app.run(debug=True)
