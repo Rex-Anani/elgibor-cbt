@@ -536,136 +536,80 @@ def admin_dashboard():
     """
     return render_layout(html, exams=exams, questions_count=questions_count)
 
-@app.route('/add-question', methods=['GET', 'POST'])
-def add_question():
-    if session.get('role') not in ['school_admin', 'teacher', 'super_admin']:
+@app.route('/questions', methods=['GET', 'POST'])
+def manage_questions():
+    if session.get('role') not in ['super_admin', 'school_admin', 'teacher']:
+        flash('Access denied', 'danger')
         return redirect(url_for('index'))
-        
-    if request.method == 'POST':
-        # Single Question Addition
-        if 'single_submit' in request.form:
-            new_q = Question(
-                subject=request.form['subject'].strip(),
-                class_level=request.form['class_level'].strip(),
-                question_text=request.form['question_text'].strip(),
-                option_a=request.form['option_a'].strip(),
-                option_b=request.form['option_b'].strip(),
-                option_c=request.form['option_c'].strip(),
-                option_d=request.form['option_d'].strip(),
-                correct_option=request.form['correct_option'].strip().upper()
-            )
-            db.session.add(new_q)
-            db.session.commit()
-            flash('Question saved to bank successfully!', 'success')
-            return redirect(url_for('add_question'))
+
+    current_user_id = session.get('user_id')
+    current_role = session.get('role')
+
+    if request.method == 'POST' and request.form.get('action') == 'delete':
+        q_id = request.form.get('question_id')
+        question = Question.query.get_or_404(q_id)
+
+        # Enforce Ownership and Role Rules
+        if current_role == 'super_admin' or current_role == 'school_admin' or question.created_by_id == current_user_id:
+            question.is_deleted = True  # Soft delete to preserve historical integrity
             
-        # Robust Bulk CSV Question Upload
-        elif 'csv_submit' in request.form:
-            csv_file = request.files.get('file')
-            if not csv_file or not csv_file.filename.endswith('.csv'):
-                flash('Please upload a valid .csv file', 'danger')
-                return redirect(url_for('add_question'))
-                
-            try:
-                # Read using utf-8-sig to automatically handle Excel BOM
-                content = csv_file.stream.read().decode("utf-8-sig")
-                stream = io.StringIO(content, newline=None)
-                csv_reader = csv.DictReader(stream)
-                
-                # Clean header names (strip spaces and lowercase them)
-                if csv_reader.fieldnames:
-                    csv_reader.fieldnames = [name.strip().lower() for name in csv_reader.fieldnames]
-                
-                added_count = 0
-                for row in csv_reader:
-                    # Skip completely empty rows
-                    if not any(row.values()):
-                        continue
-                        
-                    q = Question(
-                        subject=row.get('subject', '').strip(),
-                        class_level=row.get('class_level', '').strip(),
-                        question_text=row.get('question_text', '').strip(),
-                        option_a=row.get('option_a', '').strip(),
-                        option_b=row.get('option_b', '').strip(),
-                        option_c=row.get('option_c', '').strip(),
-                        option_d=row.get('option_d', '').strip(),
-                        correct_option=row.get('correct_option', '').strip().upper()
-                    )
-                    db.session.add(q)
-                    added_count += 1
-                    
-                db.session.commit()
-                flash(f'Successfully imported {added_count} questions from CSV!', 'success')
-                return redirect(url_for('admin_dashboard'))
-                
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Error reading CSV file: {str(e)}. Please check your file headers and formatting.', 'danger')
-                return redirect(url_for('add_question'))
+            log = AuditLog(
+                user=session['username'], 
+                action=f"Deleted Question ID #{question.id} ({question.subject})"
+            )
+            db.session.add(log)
+            db.session.commit()
+            flash('Question successfully removed.', 'warning')
+        else:
+            flash('You can only delete questions that you uploaded.', 'danger')
+
+        return redirect(url_for('manage_questions'))
+
+    # Fetch active questions based on permissions
+    questions = Question.query.filter_by(is_deleted=False).all()
 
     html = """
-    <div class="row justify-content-center">
-        <div class="col-md-8">
-            <div class="card p-4 mb-4">
-                <h4>Option 1: Add Single Question</h4>
-                <form method="POST" class="mt-3">
-                    <input type="hidden" name="single_submit" value="1">
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <label class="form-label">Subject</label>
-                            <input type="text" name="subject" class="form-control" placeholder="e.g., Mathematics" required>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Target Class</label>
-                            <select name="class_level" class="form-select" required>
-                                <option value="Primary 1-3">Primary 1 - 3</option>
-                                <option value="Primary 4-6">Primary 4 - 6</option>
-                                <option value="JSS 1-3">Junior Secondary (JSS 1-3)</option>
-                                <option value="SSS 1-3">Senior Secondary (SSS 1-3)</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Question Text</label>
-                        <textarea name="question_text" class="form-control" rows="2" required></textarea>
-                    </div>
-                    <div class="row mb-3">
-                        <div class="col-md-6"><label>Option A</label><input type="text" name="option_a" class="form-control" required></div>
-                        <div class="col-md-6"><label>Option B</label><input type="text" name="option_b" class="form-control" required></div>
-                    </div>
-                    <div class="row mb-3">
-                        <div class="col-md-6"><label>Option C</label><input type="text" name="option_c" class="form-control" required></div>
-                        <div class="col-md-6"><label>Option D</label><input type="text" name="option_d" class="form-control" required></div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Correct Option</label>
-                        <select name="correct_option" class="form-select" required>
-                            <option value="A">Option A</option>
-                            <option value="B">Option B</option>
-                            <option value="C">Option C</option>
-                            <option value="D">Option D</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-success w-100">Save Question</button>
-                </form>
-            </div>
-            
-            <div class="card p-4">
-                <h4>Option 2: Bulk Upload via CSV File</h4>
-                <p class="text-muted small">Upload a .csv file with columns: <code>subject, class_level, question_text, option_a, option_b, option_c, option_d, correct_option</code></p>
-                <form method="POST" enctype="multipart/form-data" class="mt-2">
-                    <input type="hidden" name="csv_submit" value="1">
-                    <div class="mb-3">
-                        <input type="file" name="file" class="form-control" accept=".csv" required>
-                    </div>
-                    <button type="submit" class="btn btn-outline-primary w-100">Upload CSV Questions</button>
-                </form>
-            </div>
-        </div>
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Question Bank Management</h2>
+        <a href="{{ url_for('add_question') }}" class="btn btn-primary">+ Add New Questions</a>
+    </div>
+
+    <div class="card p-4">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>Subject</th>
+                    <th>Class</th>
+                    <th>Question</th>
+                    <th>Correct Option</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for q in questions %}
+                <tr>
+                    <td><strong>{{ q.subject }}</strong></td>
+                    <td><span class="badge bg-secondary">{{ q.class_level }}</span></td>
+                    <td>{{ q.question_text }}</td>
+                    <td><span class="badge bg-success">{{ q.correct_option }}</span></td>
+                    <td>
+                        {% if session.get('role') in ['super_admin', 'school_admin'] or q.created_by_id == session.get('user_id') %}
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this question from bank?');">
+                            <input type="hidden" name="action" value="delete">
+                            <input type="hidden" name="question_id" value="{{ q.id }}">
+                            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                        </form>
+                        {% else %}
+                        <span class="text-muted small">No Permission</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
     """
-    return render_layout(html)
+    return render_layout(html, questions=questions)
     
 @app.route('/create-exam', methods=['GET', 'POST'])
 def create_exam():
