@@ -4,6 +4,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import random
 from datetime import datetime, timedelta
 import os
+import csv
+import io
 
 app = Flask(__name__)
 
@@ -289,11 +291,30 @@ def admin_dashboard():
         return redirect(url_for('index'))
         
     exams = Examination.query.all()
+    questions_count = Question.query.count()
     
     html = """
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2>Teacher / Admin Management</h2>
-        <a href="{{ url_for('create_exam') }}" class="btn btn-primary">+ Create New Exam</a>
+        <div>
+            <a href="{{ url_for('add_question') }}" class="btn btn-outline-primary me-2">+ Add Questions</a>
+            <a href="{{ url_for('create_exam') }}" class="btn btn-primary">+ Create New Exam</a>
+        </div>
+    </div>
+    
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card p-3 bg-light border">
+                <h5>Question Bank Size</h5>
+                <h3>{{ questions_count }} Questions Available</h3>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card p-3 bg-light border">
+                <h5>Active Exams</h5>
+                <h3>{{ exams|length }} Scheduled</h3>
+            </div>
+        </div>
     </div>
     
     <div class="card p-4">
@@ -330,7 +351,122 @@ def admin_dashboard():
         </table>
     </div>
     """
-    return render_layout(html, exams=exams)
+    return render_layout(html, exams=exams, questions_count=questions_count)
+
+@app.route('/add-question', methods=['GET', 'POST'])
+def add_question():
+    if session.get('role') not in ['school_admin', 'teacher', 'super_admin']:
+        return redirect(url_for('index'))
+        
+    if request.method == 'POST':
+        # Single Question Addition
+        if 'single_submit' in request.form:
+            new_q = Question(
+                subject=request.form['subject'],
+                class_level=request.form['class_level'],
+                question_text=request.form['question_text'],
+                option_a=request.form['option_a'],
+                option_b=request.form['option_b'],
+                option_c=request.form['option_c'],
+                option_d=request.form['option_d'],
+                correct_option=request.form['correct_option']
+            )
+            db.session.add(new_q)
+            db.session.commit()
+            flash('Question saved to bank successfully!', 'success')
+            return redirect(url_for('add_question'))
+            
+        # Bulk CSV Question Upload
+        elif 'csv_submit' in request.form:
+            csv_file = request.files.get('file')
+            if not csv_file or not csv_file.filename.endswith('.csv'):
+                flash('Please upload a valid .csv file', 'danger')
+                return redirect(url_for('add_question'))
+                
+            stream = io.StringIO(csv_file.stream.read().decode("UTF-8"), newline=None)
+            csv_reader = csv.DictReader(stream)
+            
+            added_count = 0
+            for row in csv_reader:
+                q = Question(
+                    subject=row['subject'].strip(),
+                    class_level=row['class_level'].strip(),
+                    question_text=row['question_text'].strip(),
+                    option_a=row['option_a'].strip(),
+                    option_b=row['option_b'].strip(),
+                    option_c=row['option_c'].strip(),
+                    option_d=row['option_d'].strip(),
+                    correct_option=row['correct_option'].strip().upper()
+                )
+                db.session.add(q)
+                added_count += 1
+                
+            db.session.commit()
+            flash(f'Successfully imported {added_count} questions from CSV!', 'success')
+            return redirect(url_for('admin_dashboard'))
+
+    html = """
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card p-4 mb-4">
+                <h4>Option 1: Add Single Question</h4>
+                <form method="POST" class="mt-3">
+                    <input type="hidden" name="single_submit" value="1">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Subject</label>
+                            <input type="text" name="subject" class="form-control" placeholder="e.g., Mathematics" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Target Class</label>
+                            <select name="class_level" class="form-select" required>
+                                <option value="Primary 1-3">Primary 1 - 3</option>
+                                <option value="Primary 4-6">Primary 4 - 6</option>
+                                <option value="JSS 1-3">Junior Secondary (JSS 1-3)</option>
+                                <option value="SSS 1-3">Senior Secondary (SSS 1-3)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Question Text</label>
+                        <textarea name="question_text" class="form-control" rows="2" required></textarea>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-6"><label>Option A</label><input type="text" name="option_a" class="form-control" required></div>
+                        <div class="col-md-6"><label>Option B</label><input type="text" name="option_b" class="form-control" required></div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-6"><label>Option C</label><input type="text" name="option_c" class="form-control" required></div>
+                        <div class="col-md-6"><label>Option D</label><input type="text" name="option_d" class="form-control" required></div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Correct Option</label>
+                        <select name="correct_option" class="form-select" required>
+                            <option value="A">Option A</option>
+                            <option value="B">Option B</option>
+                            <option value="C">Option C</option>
+                            <option value="D">Option D</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">Save Question</button>
+                </form>
+            </div>
+            
+            <div class="card p-4">
+                <h4>Option 2: Bulk Upload via CSV File</h4>
+                <p class="text-muted small">Upload a .csv file with columns: <code>subject, class_level, question_text, option_a, option_b, option_c, option_d, correct_option</code></p>
+                <form method="POST" enctype="multipart/form-data" class="mt-2">
+                    <input type="hidden" name="csv_submit" value="1">
+                    <div class="mb-3">
+                        <input type="file" name="file" class="form-control" accept=".csv" required>
+                    </div>
+                    <button type="submit" class="btn btn-outline-primary w-100">Upload CSV Questions</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    """
+    return render_layout(html)
 
 @app.route('/create-exam', methods=['GET', 'POST'])
 def create_exam():
