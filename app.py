@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template_string, request, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import random
@@ -19,10 +19,8 @@ if db_url.startswith("postgres://"):
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Initialize SQLAlchemy after configuration
 db = SQLAlchemy(app)
 
-# Helper for WAT (UTC+1) local timestamps
 def get_local_time():
     return datetime.utcnow() + timedelta(hours=1)
 
@@ -43,12 +41,6 @@ class User(db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
-
-class AcademicSession(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    session_name = db.Column(db.String(50), nullable=False)
-    term = db.Column(db.String(20), nullable=False)
-    is_active = db.Column(db.Boolean, default=True)
 
 class Question(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -132,6 +124,10 @@ BASE_LAYOUT = """
 </body>
 </html>
 """
+
+def render_layout(content_html, **context):
+    full_template = BASE_LAYOUT.replace("{% block content %}{% endblock %}", content_html)
+    return render_template_string(full_template, **context)
 
 # ==========================================
 # 4. ROUTES
@@ -239,8 +235,7 @@ def super_admin_dashboard():
     users_count = User.query.count()
     exams_count = Examination.query.count()
     
-    # Inject inner content directly into BASE_LAYOUT without re-declaring {% block content %}
-    dashboard_html = """
+    html = """
     <h2 class="mb-4">Super Admin Control Center</h2>
     <div class="row mb-4">
         <div class="col-md-4">
@@ -285,10 +280,8 @@ def super_admin_dashboard():
         </table>
     </div>
     """
-    
-    full_template = BASE_LAYOUT.replace("{% block content %}{% endblock %}", dashboard_html)
-    return render_template_string(full_template, logs=logs, users_count=users_count, exams_count=exams_count)
-    
+    return render_layout(html, logs=logs, users_count=users_count, exams_count=exams_count)
+
 @app.route('/admin')
 def admin_dashboard():
     if session.get('role') not in ['school_admin', 'teacher', 'super_admin']:
@@ -296,12 +289,10 @@ def admin_dashboard():
         return redirect(url_for('index'))
         
     exams = Examination.query.all()
-    questions_count = Question.query.count()
     
-    return render_template_string(BASE_LAYOUT + """
-    {% block content %}
+    html = """
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2>Academic & Examination Management</h2>
+        <h2>Teacher / Admin Management</h2>
         <a href="{{ url_for('create_exam') }}" class="btn btn-primary">+ Create New Exam</a>
     </div>
     
@@ -338,8 +329,8 @@ def admin_dashboard():
             </tbody>
         </table>
     </div>
-    {% endblock %}
-    """, exams=exams, questions_count=questions_count)
+    """
+    return render_layout(html, exams=exams)
 
 @app.route('/create-exam', methods=['GET', 'POST'])
 def create_exam():
@@ -363,8 +354,7 @@ def create_exam():
         flash('Examination created and published successfully!', 'success')
         return redirect(url_for('admin_dashboard'))
         
-    return render_template_string(BASE_LAYOUT + """
-    {% block content %}
+    html = """
     <div class="row justify-content-center">
         <div class="col-md-6">
             <div class="card p-4">
@@ -405,8 +395,8 @@ def create_exam():
             </div>
         </div>
     </div>
-    {% endblock %}
-    """)
+    """
+    return render_layout(html)
 
 @app.route('/student')
 def student_dashboard():
@@ -417,8 +407,7 @@ def student_dashboard():
     available_exams = Examination.query.filter_by(class_level=student_class, is_published=True).all()
     past_results = TestResult.query.filter_by(student_id=session['user_id']).all()
     
-    return render_template_string(BASE_LAYOUT + """
-    {% block content %}
+    html = """
     <h2 class="mb-4">Student Assessment Dashboard</h2>
     <div class="row">
         <div class="col-md-7">
@@ -469,8 +458,8 @@ def student_dashboard():
             </div>
         </div>
     </div>
-    {% endblock %}
-    """, available_exams=available_exams, past_results=past_results)
+    """
+    return render_layout(html, available_exams=available_exams, past_results=past_results)
 
 @app.route('/take-exam/<int:exam_id>')
 def take_exam(exam_id):
