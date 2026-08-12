@@ -55,7 +55,9 @@ class Question(db.Model):
     option_c = db.Column(db.String(200), nullable=False)
     option_d = db.Column(db.String(200), nullable=False)
     correct_option = db.Column(db.String(1), nullable=False)
-
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    is_deleted = db.Column(db.Boolean, default=False)
+    
 class Examination(db.Model):
     id = db.Column(db.Integer, primary_primary=True) if hasattr(db, 'Integer') else None
     id = db.Column(db.Integer, primary_key=True)
