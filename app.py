@@ -239,8 +239,8 @@ def super_admin_dashboard():
     users_count = User.query.count()
     exams_count = Examination.query.count()
     
-    return render_template_string(BASE_LAYOUT + """
-    {% block content %}
+    # Inject inner content directly into BASE_LAYOUT without re-declaring {% block content %}
+    dashboard_html = """
     <h2 class="mb-4">Super Admin Control Center</h2>
     <div class="row mb-4">
         <div class="col-md-4">
@@ -284,9 +284,11 @@ def super_admin_dashboard():
             </tbody>
         </table>
     </div>
-    {% endblock %}
-    """, logs=logs, users_count=users_count, exams_count=exams_count)
-
+    """
+    
+    full_template = BASE_LAYOUT.replace("{% block content %}{% endblock %}", dashboard_html)
+    return render_template_string(full_template, logs=logs, users_count=users_count, exams_count=exams_count)
+    
 @app.route('/admin')
 def admin_dashboard():
     if session.get('role') not in ['school_admin', 'teacher', 'super_admin']:
