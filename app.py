@@ -534,56 +534,103 @@ def admin_dashboard():
     """
     return render_layout(html, exams=exams, questions_count=questions_count)
 
+import csv
+import io
+from flask import Flask, render_template_string, request, redirect, url_for, session, flash
+
 @app.route('/add-question', methods=['GET', 'POST'])
 def add_question():
-    if session.get('role') not in ['school_admin', 'teacher', 'super_admin']:
+    # Enforce role restriction
+    if session.get('role') not in ['super_admin', 'school_admin', 'teacher']:
+        flash('Access restricted to administrators and teachers only.', 'danger')
         return redirect(url_for('index'))
         
     if request.method == 'POST':
+        # ----------------------------------------------------
+        # 1. SINGLE QUESTION SUBMISSION
+        # ----------------------------------------------------
         if 'single_submit' in request.form:
-            new_q = Question(
-                subject=request.form['subject'],
-                class_level=request.form['class_level'],
-                question_text=request.form['question_text'],
-                option_a=request.form['option_a'],
-                option_b=request.form['option_b'],
-                option_c=request.form['option_c'],
-                option_d=request.form['option_d'],
-                correct_option=request.form['correct_option']
-            )
-            db.session.add(new_q)
-            db.session.commit()
-            flash('Question saved to bank successfully!', 'success')
+            try:
+                new_q = Question(
+                    subject=request.form['subject'].strip(),
+                    class_level=request.form['class_level'].strip(),
+                    question_text=request.form['question_text'].strip(),
+                    option_a=request.form['option_a'].strip(),
+                    option_b=request.form['option_b'].strip(),
+                    option_c=request.form['option_c'].strip(),
+                    option_d=request.form['option_d'].strip(),
+                    correct_option=request.form['correct_option'].strip().upper()
+                )
+                db.session.add(new_q)
+                db.session.commit()
+                flash('Question saved to bank successfully!', 'success')
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Error saving question: {str(e)}', 'danger')
+                
             return redirect(url_for('add_question'))
             
+        # ----------------------------------------------------
+        # 2. BULK CSV UPLOAD (ROBUST PARSER)
+        # ----------------------------------------------------
         elif 'csv_submit' in request.form:
             csv_file = request.files.get('file')
-            if not csv_file or not csv_file.filename.endswith('.csv'):
-                flash('Please upload a valid .csv file', 'danger')
+            
+            # Basic file validation
+            if not csv_file or not csv_file.filename.lower().endswith('.csv'):
+                flash('Please select a valid .csv file to upload.', 'danger')
                 return redirect(url_for('add_question'))
                 
-            stream = io.StringIO(csv_file.stream.read().decode("UTF-8"), newline=None)
-            csv_reader = csv.DictReader(stream)
-            
-            added_count = 0
-            for row in csv_reader:
-                q = Question(
-                    subject=row['subject'].strip(),
-                    class_level=row['class_level'].strip(),
-                    question_text=row['question_text'].strip(),
-                    option_a=row['option_a'].strip(),
-                    option_b=row['option_b'].strip(),
-                    option_c=row['option_c'].strip(),
-                    option_d=row['option_d'].strip(),
-                    correct_option=row['correct_option'].strip().upper()
-                )
-                db.session.add(q)
-                added_count += 1
+            try:
+                # Read stream with 'utf-8-sig' to automatically purge Excel's hidden BOM
+                raw_bytes = csv_file.stream.read()
+                decoded_file = raw_bytes.decode("utf-8-sig")
+                stream = io.StringIO(decoded_file, newline=None)
                 
-            db.session.commit()
-            flash(f'Successfully imported {added_count} questions from CSV!', 'success')
-            return redirect(url_for('admin_dashboard'))
+                csv_reader = csv.DictReader(stream)
+                
+                # Normalize column headers (strip whitespace & lowercase)
+                if csv_reader.fieldnames:
+                    csv_reader.fieldnames = [str(header).strip().lower() for header in csv_reader.fieldnames]
+                
+                # Check for required columns
+                required_cols = {'subject', 'class_level', 'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_option'}
+                actual_cols = set(csv_reader.fieldnames or [])
+                
+                if not required_cols.issubset(actual_cols):
+                    missing = required_cols - actual_cols
+                    flash(f'CSV is missing required headers: {", ".join(missing)}', 'danger')
+                    return redirect(url_for('add_question'))
 
+                added_count = 0
+                for row_num, row in enumerate(csv_reader, start=1):
+                    # Skip empty rows
+                    if not any(row.values()):
+                        continue
+                        
+                    q = Question(
+                        subject=row.get('subject', '').strip(),
+                        class_level=row.get('class_level', '').strip(),
+                        question_text=row.get('question_text', '').strip(),
+                        option_a=row.get('option_a', '').strip(),
+                        option_b=row.get('option_b', '').strip(),
+                        option_c=row.get('option_c', '').strip(),
+                        option_d=row.get('option_d', '').strip(),
+                        correct_option=row.get('correct_option', '').strip().upper()
+                    )
+                    db.session.add(q)
+                    added_count += 1
+                    
+                db.session.commit()
+                flash(f'Successfully imported {added_count} questions from CSV!', 'success')
+                return redirect(url_for('admin_dashboard'))
+                
+            except Exception as e:
+                db.session.rollback()
+                flash(f'Error processing CSV file: {str(e)}. Please verify file formatting.', 'danger')
+                return redirect(url_for('add_question'))
+
+    # HTML Form Layout
     html = """
     <div class="row justify-content-center">
         <div class="col-md-8">
@@ -633,7 +680,7 @@ def add_question():
             
             <div class="card p-4">
                 <h4>Option 2: Bulk Upload via CSV File</h4>
-                <p class="text-muted small">Upload a .csv file with columns: <code>subject, class_level, question_text, option_a, option_b, option_c, option_d, correct_option</code></p>
+                <p class="text-muted small">Upload a <code>.csv</code> file with exact headers: <code>subject, class_level, question_text, option_a, option_b, option_c, option_d, correct_option</code></p>
                 <form method="POST" enctype="multipart/form-data" class="mt-2">
                     <input type="hidden" name="csv_submit" value="1">
                     <div class="mb-3">
@@ -646,7 +693,7 @@ def add_question():
     </div>
     """
     return render_layout(html)
-
+    
 @app.route('/create-exam', methods=['GET', 'POST'])
 def create_exam():
     if session.get('role') not in ['school_admin', 'teacher', 'super_admin']:
