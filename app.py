@@ -162,80 +162,47 @@ def login():
         password = request.form['password'].strip()
         user = User.query.filter_by(username=username).first()
         
+        # Verify user exists and password is correct
         if user and user.check_password(password):
             if not user.is_active:
                 flash('Your account has been locked by the Super Admin. Access denied.', 'danger')
                 return redirect(url_for('login'))
 
+            # Establish Session Data
             session['user_id'] = user.id
             session['username'] = user.username
             session['role'] = user.role
             session['full_name'] = user.full_name
-            session['class_level'] = user.class_level
+            session['class_level'] = user.class_level if user.class_level else ""
             
             log = AuditLog(user=user.username, action="User logged in")
             db.session.add(log)
             db.session.commit()
             
-            flash('Welcome back, ' + user.full_name + '!', 'success')
+            flash(f'Welcome back, {user.full_name}!', 'success')
             return redirect(url_for('index'))
         else:
             flash('Invalid username or password', 'danger')
             
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>Great Elgibor Schools - Academic CBT Portal</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-            body { background-color: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-            .navbar-brand { font-weight: bold; color: #1e3c72 !important; }
-            .card { border: none; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-            .btn-primary { background-color: #1e3c72; border: none; }
-            .btn-primary:hover { background-color: #2a5298; }
-        </style>
-    </head>
-    <body>
-    <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm mb-4">
-        <div class="container">
-            <a class="navbar-brand" href="#">GREAT ELGIBOR CBT</a>
-        </div>
-    </nav>
-    <div class="container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, msg in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-                        {{ msg }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    return render_layout("""
+    <div class="row justify-content-center mt-5">
+        <div class="col-md-5">
+            <div class="card p-4">
+                <h3 class="text-center mb-4 text-primary">Portal Login</h3>
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">Username / Account ID</label>
+                        <input type="text" name="username" class="form-control" required placeholder="Enter your username">
                     </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        
-        <div class="row justify-content-center mt-5">
-            <div class="col-md-5">
-                <div class="card p-4">
-                    <h3 class="text-center mb-4 text-primary">Portal Login</h3>
-                    <form method="POST">
-                        <div class="mb-3">
-                            <label class="form-label">Username / Student ID</label>
-                            <input type="text" name="username" class="form-control" required placeholder="Enter your ID">
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Password</label>
-                            <input type="password" name="password" class="form-control" required placeholder="Enter password">
-                        </div>
-                        <button type="submit" class="btn btn-primary w-100">Sign In</button>
-                    </form>
-                </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" required placeholder="Enter password">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Sign In</button>
+                </form>
             </div>
         </div>
     </div>
-    </body>
-    </html>
     """)
 
 @app.route('/manage-users', methods=['GET', 'POST'])
@@ -249,163 +216,47 @@ def manage_users():
         action = request.form.get('action')
         
         if action == 'add_user':
-            target_role = request.form['role']
-            if current_role != 'super_admin' and target_role == 'school_admin':
+            target_role = request.form.get('role')
+            username = request.form.get('username', '').strip()
+            password = request.form.get('password', '').strip()
+            full_name = request.form.get('full_name', '').strip()
+            class_level = request.form.get('class_level', '').strip()
+
+            # Security Guard: Only Super Admin can create School Admin
+            if current_role != 'super_admin' and target_role in ['school_admin', 'super_admin']:
                 flash('Only Super Admin can assign School Admins.', 'danger')
                 return redirect(url_for('manage_users'))
 
+            # Check if username already exists
+            existing_user = User.query.filter_by(username=username).first()
+            if existing_user:
+                flash(f'Username "{username}" is already taken. Please choose another.', 'danger')
+                return redirect(url_for('manage_users'))
+
+            # Create User Instance safely
             new_user = User(
-                username=request.form['username'].strip(),
-                full_name=request.form['full_name'].strip(),
+                username=username,
+                full_name=full_name,
                 role=target_role,
-                class_level=request.form.get('class_level', '')
+                class_level=class_level if target_role == 'student' else None,
+                is_active=True
             )
-            new_user.set_password(request.form['password'].strip())
+            # Hash password securely
+            new_user.set_password(password)
+            
             db.session.add(new_user)
             db.session.commit()
             
             log = AuditLog(user=session['username'], action=f"Created {target_role} account: {new_user.username}")
             db.session.add(log)
             db.session.commit()
-            flash(f'Account created successfully for {new_user.full_name}!', 'success')
-
-        elif action == 'toggle_lock':
-            user_id = request.form.get('user_id')
-            user_to_toggle = User.query.get_or_404(user_id)
             
-            if current_role != 'super_admin':
-                flash('Only Super Admin can lock or unlock accounts.', 'danger')
-                return redirect(url_for('manage_users'))
-
-            user_to_toggle.is_active = not user_to_toggle.is_active
-            status_text = "unlocked" if user_to_toggle.is_active else "locked"
-            
-            log = AuditLog(user=session['username'], action=f"Super Admin {status_text} account: {user_to_toggle.username}")
-            db.session.add(log)
-            db.session.commit()
-            flash(f'Account for {user_to_toggle.full_name} has been {status_text}.', 'info')
-
-        elif action == 'delete_user':
-            user_id = request.form.get('user_id')
-            user_to_delete = User.query.get_or_404(user_id)
-            
-            if current_role != 'super_admin' and user_to_delete.role in ['school_admin', 'super_admin']:
-                flash('You do not have permission to delete administrative accounts.', 'danger')
-                return redirect(url_for('manage_users'))
-
-            db.session.delete(user_to_delete)
-            log = AuditLog(user=session['username'], action=f"Deleted user account: {user_to_delete.username}")
-            db.session.add(log)
-            db.session.commit()
-            flash('User deleted successfully.', 'warning')
-
-        return redirect(url_for('manage_users'))
+            flash(f'Account created successfully for {new_user.full_name} ({target_role})!', 'success')
+            return redirect(url_for('manage_users'))
 
     users = User.query.all()
-    html = """
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2>User Account Management Center</h2>
-    </div>
-
-    <div class="row">
-        <div class="col-md-4">
-            <div class="card p-4 mb-4">
-                <h4>Create New User</h4>
-                <form method="POST" class="mt-3">
-                    <input type="hidden" name="action" value="add_user">
-                    <div class="mb-3">
-                        <label class="form-label">Full Name</label>
-                        <input type="text" name="full_name" class="form-control" required placeholder="e.g. Jane Doe">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Username / Student ID</label>
-                        <input type="text" name="username" class="form-control" required placeholder="e.g. teacher2">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Password</label>
-                        <input type="password" name="password" class="form-control" required placeholder="Enter password">
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Assign Role</label>
-                        <select name="role" class="form-select" required>
-                            <option value="student">Student</option>
-                            <option value="teacher">Teacher</option>
-                            {% if session.get('role') == 'super_admin' %}
-                            <option value="school_admin">School Admin</option>
-                            {% endif %}
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Target Class (If Student)</label>
-                        <select name="class_level" class="form-select">
-                            <option value="">None</option>
-                            <option value="Primary 1-3">Primary 1 - 3</option>
-                            <option value="Primary 4-6">Primary 4 - 6</option>
-                            <option value="JSS 1-3">Junior Secondary (JSS 1-3)</option>
-                            <option value="SSS 1-3">Senior Secondary (SSS 1-3)</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100">Create Account</button>
-                </form>
-            </div>
-        </div>
-
-        <div class="col-md-8">
-            <div class="card p-4">
-                <h4>System Users</h4>
-                <table class="table table-hover mt-3">
-                    <thead>
-                        <tr>
-                            <th>User</th>
-                            <th>Role</th>
-                            <th>Class</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for u in users %}
-                        <tr>
-                            <td><strong>{{ u.full_name }}</strong><br><small class="text-muted">@{{ u.username }}</small></td>
-                            <td><span class="badge bg-secondary">{{ u.role|upper }}</span></td>
-                            <td>{{ u.class_level if u.class_level else '-' }}</td>
-                            <td>
-                                {% if u.is_active %}
-                                    <span class="badge bg-success">Active</span>
-                                {% else %}
-                                    <span class="badge bg-danger">Locked Out</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if u.role != 'super_admin' %}
-                                    {% if session.get('role') == 'super_admin' %}
-                                        <form method="POST" style="display:inline-block;">
-                                            <input type="hidden" name="action" value="toggle_lock">
-                                            <input type="hidden" name="user_id" value="{{ u.id }}">
-                                            {% if u.is_active %}
-                                                <button type="submit" class="btn btn-sm btn-warning">Lock</button>
-                                            {% else %}
-                                                <button type="submit" class="btn btn-sm btn-info">Unlock</button>
-                                            {% endif %}
-                                        </form>
-                                    {% endif %}
-                                    <form method="POST" style="display:inline-block;" onsubmit="return confirm('Are you sure you want to remove this user?');">
-                                        <input type="hidden" name="action" value="delete_user">
-                                        <input type="hidden" name="user_id" value="{{ u.id }}">
-                                        <button type="submit" class="btn btn-sm btn-danger">Delete</button>
-                                    </form>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    """
-    return render_layout(html, users=users)
-
+    return render_layout(USER_MANAGEMENT_HTML, users=users)
+    
 @app.route('/super-admin')
 def super_admin_dashboard():
     if session.get('role') != 'super_admin':
