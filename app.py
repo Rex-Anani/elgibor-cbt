@@ -818,85 +818,95 @@ def student_dashboard():
     """
     return render_layout(html, available_exams=available_exams, past_results=past_results)
 
-@app.route('/take-exam/<int:exam_id>')
+from sqlalchemy import func
+
+@app.route('/take-exam/<int:exam_id>', methods=['GET', 'POST'])
 def take_exam(exam_id):
     if session.get('role') != 'student':
+        flash('Only students can take examinations.', 'danger')
         return redirect(url_for('index'))
-        
-    exam = Examination.query.get_or_404(exam_id)
-    questions = Question.query.filter_by(subject=exam.subject, class_level=exam.class_level).all()
-    random.shuffle(questions)
-    
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>Taking Exam: {{ exam.title }}</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-            body { user-select: none; background-color: #f8f9fa; }
-            .timer-box { position: fixed; top: 20px; right: 20px; background: #dc3545; color: white; padding: 10px 20px; border-radius: 5px; font-weight: bold; }
-        </style>
-    </head>
-    <body oncopy="return false" onpaste="return false" oncontextmenu="return false">
-    
-    <div class="timer-box" id="timer">Time Remaining: --:--</div>
-    
-    <div class="container my-5">
-        <div class="card p-4 shadow-sm">
-            <h3>{{ exam.title }} ({{ exam.subject }})</h3>
-            <p class="text-muted">Class: {{ exam.class_level }} | Total Questions: {{ questions|length }}</p>
-            <hr>
-            
-            <form id="examForm" action="{{ url_for('submit_exam', exam_id=exam.id) }}" method="POST">
-                {% for q in questions %}
-                <div class="mb-4">
-                    <h5>Q{{ loop.index }}. {{ q.question_text }}</h5>
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="A" id="q{{ q.id }}a">
-                        <label class="form-check-label" for="q{{ q.id }}a">A) {{ q.option_a }}</label>
-                    </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="B" id="q{{ q.id }}b">
-                        <label class="form-check-label" for="q{{ q.id }}b">B) {{ q.option_b }}</label>
-                    </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="C" id="q{{ q.id }}c">
-                        <label class="form-check-label" for="q{{ q.id }}c">C) {{ q.option_c }}</label>
-                    </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="D" id="q{{ q.id }}d">
-                        <label class="form-check-label" for="q{{ q.id }}d">D) {{ q.option_d }}</label>
-                    </div>
+
+    exam = Exam.query.get_or_404(exam_id)
+
+    # Clean, case-insensitive, trimmed matching for Subject and Class Level
+    questions = Question.query.filter(
+        func.lower(func.trim(Question.subject)) == exam.subject.strip().lower(),
+        func.lower(func.trim(Question.class_level)) == exam.class_level.strip().lower(),
+        Question.is_deleted == False
+    ).all()
+
+    if request.method == 'POST':
+        # Process exam submission logic
+        score = 0
+        total = len(questions)
+        for q in questions:
+            user_answer = request.form.get(f'question_{q.id}')
+            if user_answer and user_answer.upper() == q.correct_option.upper():
+                score += 1
+
+        result = Result(
+            student_id=session['user_id'],
+            exam_id=exam.id,
+            score=score,
+            total_questions=total,
+            date_taken=datetime.now()
+        )
+        db.session.add(result)
+        db.session.commit()
+
+        flash(f'Exam completed! Your score: {score}/{total}', 'success')
+        return redirect(url_for('student_dashboard'))
+
+    # HTML Render
+    html = """
+    <div class="row justify-content-center">
+        <div class="col-md-9">
+            <div class="card p-4 shadow-sm position-relative">
+                <div class="position-absolute top-0 end-0 p-3">
+                    <span class="badge bg-danger fs-6" id="timer">Time Remaining: {{ exam.duration_minutes }}:00</span>
                 </div>
-                {% endfor %}
-                <button type="submit" class="btn btn-success btn-lg w-100">Submit Answers</button>
-            </form>
+                
+                <h3>{{ exam.title }} ({{ exam.subject }})</h3>
+                <p class="text-muted">Class: {{ exam.class_level }} | Total Questions: {{ questions|length }}</p>
+                <hr>
+
+                {% if questions %}
+                <form method="POST">
+                    {% for q in questions %}
+                    <div class="mb-4">
+                        <p class="fw-bold">{{ loop.index }}. {{ q.question_text }}</p>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="question_{{ q.id }}" value="A" id="q{{ q.id }}_a">
+                            <label class="form-check-label" for="q{{ q.id }}_a">A) {{ q.option_a }}</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="question_{{ q.id }}" value="B" id="q{{ q.id }}_b">
+                            <label class="form-check-label" for="q{{ q.id }}_b">B) {{ q.option_b }}</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="question_{{ q.id }}" value="C" id="q{{ q.id }}_c">
+                            <label class="form-check-label" for="q{{ q.id }}_c">C) {{ q.option_c }}</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="question_{{ q.id }}" value="D" id="q{{ q.id }}_d">
+                            <label class="form-check-label" for="q{{ q.id }}_d">D) {{ q.option_d }}</label>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    <button type="submit" class="btn btn-success w-100 fs-5 mt-3">Submit Answers</button>
+                </form>
+                {% else %}
+                <div class="alert alert-warning text-center">
+                    No questions have been uploaded yet for <strong>{{ exam.subject }}</strong> matching class <strong>{{ exam.class_level }}</strong>.
+                </div>
+                <a href="{{ url_for('student_dashboard') }}" class="btn btn-secondary w-100">Return to Dashboard</a>
+                {% endif %}
+            </div>
         </div>
     </div>
-
-    <script>
-        let durationMinutes = {{ exam.duration_minutes }};
-        let secondsLeft = durationMinutes * 60;
-        
-        let timerInterval = setInterval(function() {
-            let minutes = Math.floor(secondsLeft / 60);
-            let seconds = secondsLeft % 60;
-            document.getElementById('timer').innerText = `Time Remaining: ${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
-            
-            if (secondsLeft <= 0) {
-                clearInterval(timerInterval);
-                alert("Time is up! Your examination will be submitted automatically.");
-                document.getElementById('examForm').submit();
-            }
-            secondsLeft--;
-        }, 1000);
-    </script>
-    </body>
-    </html>
-    """, exam=exam, questions=questions)
-
+    """
+    return render_layout(html, exam=exam, questions=questions)
+    
 @app.route('/submit-exam/<int:exam_id>', methods=['POST'])
 def submit_exam(exam_id):
     if session.get('role') != 'student':
