@@ -574,62 +574,65 @@ def add_question():
         # 2. BULK CSV UPLOAD (ROBUST PARSER)
         # ----------------------------------------------------
         elif 'csv_submit' in request.form:
-            csv_file = request.files.get('file')
+    csv_file = request.files.get('file')
+    
+    if not csv_file or not csv_file.filename.lower().endswith('.csv'):
+        flash('Please select a valid .csv file to upload.', 'danger')
+        return redirect(url_for('add_question'))
+        
+    try:
+        raw_bytes = csv_file.stream.read()
+        decoded_file = raw_bytes.decode("utf-8-sig")
+        
+        # 1. Automatically detect delimiter (comma vs semicolon vs tab)
+        sniffer = csv.Sniffer()
+        try:
+            dialect = sniffer.sniff(decoded_file[:2048])
+        except Exception:
+            dialect = 'excel'  # Fallback standard
             
-            # Basic file validation
-            if not csv_file or not csv_file.filename.lower().endswith('.csv'):
-                flash('Please select a valid .csv file to upload.', 'danger')
-                return redirect(url_for('add_question'))
-                
-            try:
-                # Read stream with 'utf-8-sig' to automatically purge Excel's hidden BOM
-                raw_bytes = csv_file.stream.read()
-                decoded_file = raw_bytes.decode("utf-8-sig")
-                stream = io.StringIO(decoded_file, newline=None)
-                
-                csv_reader = csv.DictReader(stream)
-                
-                # Normalize column headers (strip whitespace & lowercase)
-                if csv_reader.fieldnames:
-                    csv_reader.fieldnames = [str(header).strip().lower() for header in csv_reader.fieldnames]
-                
-                # Check for required columns
-                required_cols = {'subject', 'class_level', 'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_option'}
-                actual_cols = set(csv_reader.fieldnames or [])
-                
-                if not required_cols.issubset(actual_cols):
-                    missing = required_cols - actual_cols
-                    flash(f'CSV is missing required headers: {", ".join(missing)}', 'danger')
-                    return redirect(url_for('add_question'))
+        stream = io.StringIO(decoded_file, newline=None)
+        csv_reader = csv.DictReader(stream, dialect=dialect)
+        
+        # 2. Normalize and clean headers
+        if csv_reader.fieldnames:
+            csv_reader.fieldnames = [str(header).strip().lower() for header in csv_reader.fieldnames if header]
+        
+        required_cols = {'subject', 'class_level', 'question_text', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_option'}
+        actual_cols = set(csv_reader.fieldnames or [])
+        
+        if not required_cols.issubset(actual_cols):
+            missing = required_cols - actual_cols
+            flash(f'CSV is missing required headers: {", ".join(missing)}', 'danger')
+            return redirect(url_for('add_question'))
 
-                added_count = 0
-                for row_num, row in enumerate(csv_reader, start=1):
-                    # Skip empty rows
-                    if not any(row.values()):
-                        continue
-                        
-                    q = Question(
-                        subject=row.get('subject', '').strip(),
-                        class_level=row.get('class_level', '').strip(),
-                        question_text=row.get('question_text', '').strip(),
-                        option_a=row.get('option_a', '').strip(),
-                        option_b=row.get('option_b', '').strip(),
-                        option_c=row.get('option_c', '').strip(),
-                        option_d=row.get('option_d', '').strip(),
-                        correct_option=row.get('correct_option', '').strip().upper()
-                    )
-                    db.session.add(q)
-                    added_count += 1
-                    
-                db.session.commit()
-                flash(f'Successfully imported {added_count} questions from CSV!', 'success')
-                return redirect(url_for('admin_dashboard'))
+        added_count = 0
+        for row in csv_reader:
+            if not any(row.values()):
+                continue
                 
-            except Exception as e:
-                db.session.rollback()
-                flash(f'Error processing CSV file: {str(e)}. Please verify file formatting.', 'danger')
-                return redirect(url_for('add_question'))
-
+            q = Question(
+                subject=row.get('subject', '').strip(),
+                class_level=row.get('class_level', '').strip(),
+                question_text=row.get('question_text', '').strip(),
+                option_a=row.get('option_a', '').strip(),
+                option_b=row.get('option_b', '').strip(),
+                option_c=row.get('option_c', '').strip(),
+                option_d=row.get('option_d', '').strip(),
+                correct_option=row.get('correct_option', '').strip().upper()
+            )
+            db.session.add(q)
+            added_count += 1
+            
+        db.session.commit()
+        flash(f'Successfully imported {added_count} questions from CSV!', 'success')
+        return redirect(url_for('admin_dashboard'))
+        
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Error processing CSV file: {str(e)}', 'danger')
+        return redirect(url_for('add_question'))
+        
     # HTML Form Layout
     html = """
     <div class="row justify-content-center">
