@@ -826,38 +826,41 @@ def take_exam(exam_id):
         flash('Only students can take examinations.', 'danger')
         return redirect(url_for('index'))
 
-    exam = Exam.query.get_or_404(exam_id)
+    # 1. Matches your original 'Examination' model name
+    exam = Examination.query.get_or_404(exam_id)
 
-    # Clean, case-insensitive, trimmed matching for Subject and Class Level
+    # 2. Flexible, case-insensitive string matching for Subject and Class Level
+    # Note: If you haven't added 'is_deleted' to your Question model, remove that condition.
     questions = Question.query.filter(
         func.lower(func.trim(Question.subject)) == exam.subject.strip().lower(),
-        func.lower(func.trim(Question.class_level)) == exam.class_level.strip().lower(),
-        Question.is_deleted == False
+        func.lower(func.trim(Question.class_level)) == exam.class_level.strip().lower()
     ).all()
 
     if request.method == 'POST':
-        # Process exam submission logic
         score = 0
         total = len(questions)
         for q in questions:
-            user_answer = request.form.get(f'question_{q.id}')
-            if user_answer and user_answer.upper() == q.correct_option.upper():
+            user_answer = request.form.get(f'q_{q.id}')
+            if user_answer and user_answer.strip().upper() == q.correct_option.strip().upper():
                 score += 1
 
-        result = Result(
+        percentage = round((score / total) * 100, 2) if total > 0 else 0
+
+        # 3. Matches your original 'TestResult' model name
+        res = TestResult(
             student_id=session['user_id'],
             exam_id=exam.id,
             score=score,
             total_questions=total,
-            date_taken=datetime.now()
+            percentage=percentage
         )
-        db.session.add(result)
+        db.session.add(res)
         db.session.commit()
 
-        flash(f'Exam completed! Your score: {score}/{total}', 'success')
+        flash(f'Exam submitted successfully! You scored {score}/{total} ({percentage}%).', 'success')
         return redirect(url_for('student_dashboard'))
 
-    # HTML Render
+    # HTML Layout Render
     html = """
     <div class="row justify-content-center">
         <div class="col-md-9">
@@ -876,19 +879,19 @@ def take_exam(exam_id):
                     <div class="mb-4">
                         <p class="fw-bold">{{ loop.index }}. {{ q.question_text }}</p>
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="question_{{ q.id }}" value="A" id="q{{ q.id }}_a">
+                            <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="A" id="q{{ q.id }}_a">
                             <label class="form-check-label" for="q{{ q.id }}_a">A) {{ q.option_a }}</label>
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="question_{{ q.id }}" value="B" id="q{{ q.id }}_b">
+                            <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="B" id="q{{ q.id }}_b">
                             <label class="form-check-label" for="q{{ q.id }}_b">B) {{ q.option_b }}</label>
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="question_{{ q.id }}" value="C" id="q{{ q.id }}_c">
+                            <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="C" id="q{{ q.id }}_c">
                             <label class="form-check-label" for="q{{ q.id }}_c">C) {{ q.option_c }}</label>
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="question_{{ q.id }}" value="D" id="q{{ q.id }}_d">
+                            <input class="form-check-input" type="radio" name="q_{{ q.id }}" value="D" id="q{{ q.id }}_d">
                             <label class="form-check-label" for="q{{ q.id }}_d">D) {{ q.option_d }}</label>
                         </div>
                     </div>
@@ -897,7 +900,7 @@ def take_exam(exam_id):
                 </form>
                 {% else %}
                 <div class="alert alert-warning text-center">
-                    No questions have been uploaded yet for <strong>{{ exam.subject }}</strong> matching class <strong>{{ exam.class_level }}</strong>.
+                    No questions found for <strong>{{ exam.subject }}</strong> under <strong>{{ exam.class_level }}</strong>.
                 </div>
                 <a href="{{ url_for('student_dashboard') }}" class="btn btn-secondary w-100">Return to Dashboard</a>
                 {% endif %}
