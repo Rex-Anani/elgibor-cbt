@@ -831,11 +831,20 @@ def take_exam(exam_id):
 
     # 2. Flexible, case-insensitive string matching for Subject and Class Level
     # Note: If you haven't added 'is_deleted' to your Question model, remove that condition.
-    questions = Question.query.filter(
-        func.lower(func.trim(Question.subject)) == exam.subject.strip().lower(),
-        func.lower(func.trim(Question.class_level)) == exam.class_level.strip().lower()
+    clean_exam_subject = exam.subject.strip().lower()
+    clean_exam_class = exam.class_level.replace(" ", "").lower()
+
+    # Fetch candidate questions matching the subject
+    all_subject_questions = Question.query.filter(
+        func.lower(func.trim(Question.subject)) == clean_exam_subject
     ).all()
 
+    # Match class level while stripping extra spaces (handles 'SSS 1-3' vs 'SSS 1 - 3')
+    questions = [
+        q for q in all_subject_questions 
+        if q.class_level and q.class_level.replace(" ", "").lower() == clean_exam_class
+    ]
+    
     if request.method == 'POST':
         score = 0
         total = len(questions)
